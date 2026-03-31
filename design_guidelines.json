@@ -1,0 +1,194 @@
+{
+  "identity": {
+    "name": "E1",
+    "role": "Creative Designer",
+    "mission": "Create a high-performance, minimalist operational dashboard that outperforms spreadsheets in speed and clarity.",
+    "aesthetic": "Soft Utility / Modern SaaS",
+    "principles": [
+      "Fusion over Imitation: Mix Notion's clarity with Linear's efficiency.",
+      "Content is King: The schedule IS the content. Maximize screen real estate for the grid.",
+      "Zoom In: Use bold focus states for selected appointments.",
+      "Negative Space: Use whitespace to separate days and teams, not heavy borders.",
+      "Contrast: Use color ONLY for status and action. Everything else is monochrome."
+    ]
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Manrope, sans-serif",
+      "body": "Inter, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "weights": {
+      "light": 300,
+      "regular": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700
+    },
+    "usage": {
+      "h1": "text-3xl font-semibold tracking-tight text-slate-900",
+      "h2": "text-2xl font-semibold tracking-tight text-slate-900",
+      "h3": "text-xl font-medium text-slate-900",
+      "body": "text-sm text-slate-600 leading-relaxed",
+      "caption": "text-xs text-slate-500 font-medium uppercase tracking-wider",
+      "label": "text-sm font-medium text-slate-700"
+    }
+  },
+  "colors": {
+    "palette": {
+      "primary": {
+        "DEFAULT": "#0F172A",
+        "foreground": "#F8FAFC",
+        "hover": "#1E293B"
+      },
+      "background": {
+        "default": "#FFFFFF",
+        "subtle": "#F8FAFC",
+        "canvas": "#F1F5F9"
+      },
+      "surface": {
+        "card": "#FFFFFF",
+        "popover": "#FFFFFF",
+        "modal": "#FFFFFF"
+      },
+      "border": {
+        "default": "#E2E8F0",
+        "subtle": "#F1F5F9",
+        "focus": "#94A3B8"
+      },
+      "status": {
+        "confirmed": {
+          "bg": "#DCFCE7",
+          "text": "#166534",
+          "border": "#86EFAC"
+        },
+        "pending": {
+          "bg": "#FEF9C3",
+          "text": "#854D0E",
+          "border": "#FDE047"
+        },
+        "urgent": {
+          "bg": "#FEE2E2",
+          "text": "#991B1B",
+          "border": "#FCA5A5"
+        },
+        "rescheduled": {
+          "bg": "#F3E8FF",
+          "text": "#6B21A8",
+          "border": "#D8B4FE"
+        },
+        "cancelled": {
+          "bg": "#F1F5F9",
+          "text": "#64748B",
+          "border": "#CBD5E1"
+        }
+      }
+    },
+    "rules": [
+      "Never use pure black (#000000). Use Slate-900 (#0F172A).",
+      "Use status colors sparingly. The UI should be 90% monochrome.",
+      "Interactive elements must have a hover state that is slightly lighter/darker.",
+      "Borders should be subtle (Slate-200).",
+      "Shadows should be soft and diffuse (shadow-sm, shadow-md)."
+    ]
+  },
+  "layout": {
+    "grid_system": {
+      "dashboard": "grid grid-cols-12 gap-6 p-6",
+      "calendar_header": "flex items-center justify-between px-6 py-4 border-b border-border bg-white/80 backdrop-blur-md sticky top-0 z-10",
+      "calendar_body": "flex flex-col h-full overflow-auto",
+      "sidebar": "w-64 flex-shrink-0 border-r border-border bg-background h-screen sticky top-0"
+    },
+    "spacing": {
+      "container_padding": "p-6 md:p-8",
+      "card_padding": "p-5",
+      "gap_default": "gap-4",
+      "gap_tight": "gap-2",
+      "gap_loose": "gap-8"
+    },
+    "z_index": {
+      "modal": "z-50",
+      "dropdown": "z-40",
+      "sticky_header": "z-30",
+      "tooltip": "z-50"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+      "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80 h-9 px-4 rounded-md text-sm font-medium transition-colors",
+      "ghost": "hover:bg-accent hover:text-accent-foreground h-9 px-4 rounded-md text-sm font-medium transition-colors",
+      "outline": "border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-4 rounded-md text-sm font-medium transition-colors"
+    },
+    "cards": {
+      "base": "rounded-lg border bg-card text-card-foreground shadow-sm",
+      "interactive": "rounded-lg border bg-card text-card-foreground shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+    },
+    "inputs": {
+      "base": "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+    },
+    "calendar": {
+      "slot": "border-b border-r border-border/50 h-20 min-w-[150px] relative hover:bg-accent/30 transition-colors group",
+      "event_card": "absolute inset-x-1 rounded px-2 py-1 text-xs font-medium border-l-4 shadow-sm cursor-pointer hover:brightness-95 transition-all truncate"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": "bg-white/70 backdrop-blur-xl border-b border-white/20",
+    "shadows": {
+      "soft": "0 2px 10px rgba(0,0,0,0.03)",
+      "float": "0 10px 30px -10px rgba(0,0,0,0.08)"
+    },
+    "radius": {
+      "default": "rounded-md",
+      "large": "rounded-lg",
+      "pill": "rounded-full"
+    }
+  },
+  "motion": {
+    "transitions": "transition-all duration-200 ease-in-out",
+    "hover_lift": "hover:-translate-y-0.5 hover:shadow-md",
+    "modal_enter": "animate-in fade-in zoom-in-95 duration-200",
+    "modal_exit": "animate-out fade-out zoom-out-95 duration-200"
+  },
+  "image_urls": {
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1589220286904-3dcef62c68ee?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "user_avatar",
+        "description": "Professional woman portrait"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1575299833801-85ce40813bac?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "user_avatar",
+        "description": "Professional man portrait"
+      },
+      {
+        "url": "https://images.pexels.com/photos/1181519/pexels-photo-1181519.jpeg",
+        "category": "user_avatar",
+        "description": "Office professional"
+      },
+      {
+        "url": "https://images.pexels.com/photos/32160350/pexels-photo-32160350.jpeg",
+        "category": "user_avatar",
+        "description": "Corporate headshot"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Use 'Manrope' for all headings and 'Inter' for body text. Import them via Google Fonts in index.css.",
+    "Implement the 'Control Room' grid for the main dashboard view.",
+    "The Calendar component is the core. It must be custom-built using CSS Grid or a library like 'react-big-calendar' styled to match the guidelines.",
+    "Use Shadcn/UI components for all interactive elements (Dialogs, Dropdowns, Forms).",
+    "Ensure the 'Status' colors are applied consistently across the app (badges, borders, calendar events).",
+    "The sidebar should be collapsible to maximize the calendar view.",
+    "Use the provided image URLs for user avatars in the mockups.",
+    "Add 'data-testid' to all interactive elements."
+  ],
+  "universal_guidelines": [
+    "Do not use gradients for backgrounds. Keep it flat and clean.",
+    "Use whitespace generously. Don't crowd the interface.",
+    "Ensure high contrast for text readability (WCAG AA).",
+    "All inputs and buttons must have clear focus states.",
+    "Use 'sonner' for toast notifications."
+  ]
+}

@@ -1,0 +1,43 @@
+.App {
+  min-height: 100vh;
+  background-color: #F8FAFC;
+}
+
+.status-badge-confirmado {
+  background-color: #DCFCE7;
+  color: #166534;
+  border-color: #86EFAC;
+}
+
+.status-badge-pendente {
+  background-color: #FEF9C3;
+  color: #854D0E;
+  border-color: #FDE047;
+}
+
+.status-badge-urgente {
+  background-color: #FEE2E2;
+  color: #991B1B;
+  border-color: #FCA5A5;
+}
+
+.status-badge-reagendado {
+  background-color: #F3E8FF;
+  color: #6B21A8;
+  border-color: #D8B4FE;
+}
+
+.status-badge-cancelado {
+  background-color: #F1F5F9;
+  color: #64748B;
+  border-color: #CBD5E1;
+}
+
+.appointment-card {
+  transition: all 0.2s ease-in-out;
+}
+
+.appointment-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px -10px rgba(0,0,0,0.08);
+}

@@ -1,0 +1,26 @@
+/* date-calendar-dark.css: melhora contraste do ícone de calendário no dark mode */
+@media (prefers-color-scheme: dark) {
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: brightness(2) contrast(2) drop-shadow(0 0 2px #0ea5e9);
+    opacity: 0.95;
+  }
+  input[type="date"]::-moz-calendar-picker-indicator {
+    filter: brightness(2) contrast(2) drop-shadow(0 0 2px #0ea5e9);
+    opacity: 0.95;
+  }
+  /* Melhorar visibilidade do ícone de calendário no dark mode */
+
+.dark input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.6);
+  opacity: 0.9;
+  cursor: pointer;
+}
+
+/* hover opcional */
+.dark input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+  input[type="date"]::-ms-input-placeholder {
+    color: #e0f2fe;
+  }
+}

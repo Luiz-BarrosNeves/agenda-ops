@@ -1,0 +1,228 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+        "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+        sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Manrope', sans-serif;
+}
+
+code {
+    font-family:
+        source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+@layer base {
+    :root {
+        --background: 210 20% 98%;
+        --foreground: 222 47% 11%;
+        --card: 0 0% 100%;
+        --card-foreground: 222 47% 11%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 222 47% 11%;
+        --primary: 222 47% 11%;
+        --primary-foreground: 210 40% 98%;
+        --secondary: 210 40% 96.1%;
+        --secondary-foreground: 222 47% 11%;
+        --muted: 210 40% 96.1%;
+        --muted-foreground: 215 16% 47%;
+        --accent: 210 40% 96.1%;
+        --accent-foreground: 222 47% 11%;
+        --destructive: 0 84.2% 60.2%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 214 32% 91%;
+        --input: 214 32% 91%;
+        --ring: 222 47% 11%;
+        --radius: 0.5rem;
+    }
+
+    .dark {
+        --background: 222 47% 7%;
+        --foreground: 210 40% 96%;
+        --card: 222 47% 10%;
+        --card-foreground: 210 40% 96%;
+        --popover: 222 47% 10%;
+        --popover-foreground: 210 40% 96%;
+        --primary: 217 91% 60%;
+        --primary-foreground: 222 47% 7%;
+        --secondary: 217 33% 17%;
+        --secondary-foreground: 210 40% 96%;
+        --muted: 217 33% 17%;
+        --muted-foreground: 215 20% 60%;
+        --accent: 217 33% 17%;
+        --accent-foreground: 210 40% 96%;
+        --destructive: 0 62% 50%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 217 33% 20%;
+        --input: 217 33% 20%;
+        --ring: 217 91% 60%;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+/* Dark mode utility classes */
+@layer utilities {
+    .dark-card {
+        @apply bg-card border-border;
+    }
+    
+    .dark-surface {
+        @apply bg-muted/50 dark:bg-muted;
+    }
+    
+    .dark-hover {
+        @apply hover:bg-accent dark:hover:bg-accent;
+    }
+}
+
+/* Micro-animations for buttons and interactive elements */
+@layer components {
+    /* Button hover animation with scale */
+    .btn-animate {
+        @apply transition-all duration-200 ease-out;
+    }
+    
+    .btn-animate:hover {
+        @apply transform scale-[1.02];
+    }
+    
+    .btn-animate:active {
+        @apply transform scale-[0.98];
+    }
+    
+    /* Ripple effect container */
+    .ripple-container {
+        position: relative;
+        overflow: hidden;
+    }
+    
+    /* Card hover lift effect */
+    .card-lift {
+        @apply transition-all duration-200 ease-out;
+    }
+    
+    .card-lift:hover {
+        @apply shadow-md transform -translate-y-0.5;
+    }
+    
+    /* Pulse animation for notifications/badges */
+    .pulse-notification {
+        animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    
+    @keyframes pulse-soft {
+        0%, 100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.7;
+        }
+    }
+    
+    /* Skeleton loading animation */
+    .skeleton-pulse {
+        @apply animate-pulse bg-muted rounded;
+    }
+    
+    /* Fade in animation */
+    .fade-in {
+        animation: fadeIn 0.3s ease-in-out;
+    }
+    
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(4px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    /* Slide up animation for modals */
+    .slide-up {
+        animation: slideUp 0.2s ease-out;
+    }
+    
+    @keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    /* Focus ring enhancement */
+    .focus-ring-primary:focus-visible {
+        @apply ring-2 ring-primary ring-offset-2 ring-offset-background outline-none;
+    }
+    
+    /* Status color badges */
+    .status-badge {
+        @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors;
+    }
+    
+    .status-badge-pendente {
+        @apply bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 border border-yellow-200 dark:border-yellow-800;
+    }
+    
+    .status-badge-confirmado {
+        @apply bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 border border-green-200 dark:border-green-800;
+    }
+    
+    .status-badge-emitido {
+        @apply bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 border border-blue-200 dark:border-blue-800;
+    }
+    
+    .status-badge-cancelado {
+        @apply bg-muted text-muted-foreground border border-border;
+    }
+}
+
+/* Custom scrollbar for dark mode */
+@layer utilities {
+    .scrollbar-custom {
+        scrollbar-width: thin;
+        scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+    }
+    
+    .scrollbar-custom::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    
+    .scrollbar-custom::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    
+    .scrollbar-custom::-webkit-scrollbar-thumb {
+        background-color: hsl(var(--muted-foreground) / 0.3);
+        border-radius: 3px;
+    }
+    
+    .scrollbar-custom::-webkit-scrollbar-thumb:hover {
+        background-color: hsl(var(--muted-foreground) / 0.5);
+    }
+}
