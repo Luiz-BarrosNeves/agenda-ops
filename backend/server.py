@@ -634,6 +634,108 @@ async def go_offline(current_user: User = Depends(get_current_user)):
     await db.users.update_one({"id": current_user.id}, {"$set": {"is_online": False, "last_seen": now}})
     return {"status": "offline", "timestamp": now}
 
+from datetime import datetime
+from typing import List
+
+# =========================
+# DASHBOARD STATS
+# =========================
+@api_router.get("/stats/dashboard")
+async def get_dashboard_stats(date: str, current_user: User = Depends(get_current_user)):
+    selected_date = datetime.fromisoformat(date)
+
+    total_appointments = await db.appointments.count_documents({})
+    pending = await db.appointments.count_documents({"status": "pending"})
+    completed = await db.appointments.count_documents({"status": "completed"})
+
+    return {
+        "date": date,
+        "total": total_appointments,
+        "pending": pending,
+        "completed": completed,
+    }
+
+# =========================
+# PRESENCE AGENTS
+# =========================
+@api_router.get("/presence/agents")
+async def get_agents_presence(current_user: User = Depends(get_current_user)):
+    agents = await db.users.find({"role": "attendant"}, {"_id": 0}).to_list(100)
+
+    return [
+        {
+            "id": a["id"],
+            "name": a["name"],
+            "is_online": a.get("is_online", False),
+            "last_seen": a.get("last_seen"),
+        }
+        for a in agents
+    ]
+
+# =========================
+# ALL SLOTS
+# =========================
+@api_router.get("/slots/all")
+async def get_all_slots(date: str, current_user: User = Depends(get_current_user)):
+    slots = await db.appointments.find(
+        {"date": date}, {"_id": 0}
+    ).to_list(500)
+
+    return slots
+
+# =========================
+# AVAILABLE SLOTS
+# =========================
+@api_router.get("/appointments/available-slots")
+async def get_available_slots(date: str, current_user: User = Depends(get_current_user)):
+    slots = await db.appointments.find(
+        {"date": date, "status": "available"}, {"_id": 0}
+    ).to_list(500)
+
+    return slots
+
+# =========================
+# PENDING APPOINTMENTS
+# =========================
+@api_router.get("/appointments/pending")
+async def get_pending_appointments(current_user: User = Depends(get_current_user)):
+    pending = await db.appointments.find(
+        {"status": "pending"}, {"_id": 0}
+    ).to_list(100)
+
+    return pending
+
+# =========================
+# MY APPOINTMENTS
+# =========================
+@api_router.get("/my-appointments")
+async def get_my_appointments(date: str, current_user: User = Depends(get_current_user)):
+    my_appointments = await db.appointments.find(
+        {
+            "attendant_id": current_user.id,
+            "date": date
+        },
+        {"_id": 0}
+    ).to_list(200)
+
+    return my_appointments
+
+# =========================
+# MY APPOINTMENTS STATS
+# =========================
+@api_router.get("/my-appointments/stats")
+async def get_my_stats(current_user: User = Depends(get_current_user)):
+    total = await db.appointments.count_documents({"attendant_id": current_user.id})
+    completed = await db.appointments.count_documents(
+        {"attendant_id": current_user.id, "status": "completed"}
+    )
+
+    return {
+        "total": total,
+        "completed": completed,
+    }
+
+
 
 app.include_router(api_router)
 
