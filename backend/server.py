@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, ConfigDict
 from passlib.hash import bcrypt
@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 MONGO_URL = os.getenv("MONGO_URL")
 DB_NAME = os.getenv("DB_NAME")
-JWT_SECRET = os.getenv("JWT_SECRET", "change-me")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET não definida")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
 
@@ -42,15 +44,25 @@ security = HTTPBearer()
 
 app = FastAPI(title="AgendaOps API")
 
-print("CORS_ORIGINS:", CORS_ORIGINS)
+ALLOWED_ORIGINS = [
+    "https://agenda-ops.vercel.app",
+    "https://agenda-ops-git-main-luiz-neves-projects.vercel.app",
+    "http://localhost:3000",
+]
+
+print("ALLOWED_ORIGINS:", ALLOWED_ORIGINS)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.options("/{full_path:path}")
+async def preflight_handler(full_path: str):
+    return Response(status_code=204)
 
 api_router = APIRouter(prefix="/api")
 
