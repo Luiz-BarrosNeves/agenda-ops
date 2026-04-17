@@ -83,6 +83,23 @@ db = client[os.environ['DB_NAME']]
 # Criação do app FastAPI
 # Criação do app FastAPI
 app = FastAPI()
+
+from fastapi.middleware.cors import CORSMiddleware
+
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://agenda-ops.vercel.app",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # CORS para frontend local
 app.add_middleware(
     CORSMiddleware,
