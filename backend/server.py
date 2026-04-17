@@ -637,40 +637,8 @@ async def go_offline(current_user: User = Depends(get_current_user)):
 from datetime import datetime
 from typing import List
 
-# =========================
-# DASHBOARD STATS
-# =========================
-@api_router.get("/stats/dashboard")
-async def get_dashboard_stats(date: str, current_user: User = Depends(get_current_user)):
-    selected_date = datetime.fromisoformat(date)
 
-    total_appointments = await db.appointments.count_documents({})
-    pending = await db.appointments.count_documents({"status": "pending"})
-    completed = await db.appointments.count_documents({"status": "completed"})
 
-    return {
-        "date": date,
-        "total": total_appointments,
-        "pending": pending,
-        "completed": completed,
-    }
-
-# =========================
-# PRESENCE AGENTS
-# =========================
-@api_router.get("/presence/agents")
-async def get_agents_presence(current_user: User = Depends(get_current_user)):
-    agents = await db.users.find({"role": "attendant"}, {"_id": 0}).to_list(100)
-
-    return [
-        {
-            "id": a["id"],
-            "name": a["name"],
-            "is_online": a.get("is_online", False),
-            "last_seen": a.get("last_seen"),
-        }
-        for a in agents
-    ]
 
 # =========================
 # ALL SLOTS
@@ -705,35 +673,6 @@ async def get_pending_appointments(current_user: User = Depends(get_current_user
 
     return pending
 
-# =========================
-# MY APPOINTMENTS
-# =========================
-@api_router.get("/my-appointments")
-async def get_my_appointments(date: str, current_user: User = Depends(get_current_user)):
-    my_appointments = await db.appointments.find(
-        {
-            "attendant_id": current_user.id,
-            "date": date
-        },
-        {"_id": 0}
-    ).to_list(200)
-
-    return my_appointments
-
-# =========================
-# MY APPOINTMENTS STATS
-# =========================
-@api_router.get("/my-appointments/stats")
-async def get_my_stats(current_user: User = Depends(get_current_user)):
-    total = await db.appointments.count_documents({"attendant_id": current_user.id})
-    completed = await db.appointments.count_documents(
-        {"attendant_id": current_user.id, "status": "completed"}
-    )
-
-    return {
-        "total": total,
-        "completed": completed,
-    }
 
 from zoneinfo import ZoneInfo
 
@@ -885,6 +824,172 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
         "date": date,
         "total_agents": total_agents,
         "slots": result,
+    }
+
+
+@api_router.get("/stats/dashboard")
+async def get_dashboard_stats(date: Optional[str] = None, current_user: User = Depends(get_current_user)):
+    if current_user.role not in [UserRole.ADMIN, UserRole.SUPERVISOR]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    target_date = date or datetime.now(timezone.utc).date().isoformat()
+
+    total = await db.appointments.count_documents({"date": target_date})
+    pendentes = await db.appointments.count_documents({"date": target_date, "status": "pendente_atribuicao"})
+    confirmados = await db.appointments.count_documents({"date": target_date, "status": "confirmado"})
+    emitidos = await db.appointments.count_documents({"date": target_date, "status": "emitido"})
+    reagendar = await db.appointments.count_documents({"date": target_date, "status": "reagendar"})
+    presencial = await db.appointments.count_documents({"date": target_date, "status": "presencial"})
+    cancelados = await db.appointments.count_documents({"date": target_date, "status": "cancelado"})
+
+    agents = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0}
+    ).to_list(100)
+
+    agent_stats = []
+    for agent in agents:
+        count = await db.appointments.count_documents({
+            "user_id": agent["id"],
+            "date": target_date,
+            "status": {"$ne": "cancelado"}
+        })
+        agent_stats.append({
+            "id": agent["id"],
+            "name": agent["name"],
+            "appointments": count
+        })
+
+    return {
+        "date": target_date,
+        "total": total,
+        "by_status": {
+            "pendentes": pendentes,
+            "confirmados": confirmados,
+            "emitidos": emitidos,
+            "reagendar": reagendar,
+            "presencial": presencial,
+            "cancelados": cancelados,
+        },
+        "auto_assigned": 0,
+        "agents": agent_stats,
+    }
+
+
+@api_router.get("/presence/agents")
+async def get_agents_presence(current_user: User = Depends(get_current_user)):
+    if current_user.role not in [UserRole.ADMIN, UserRole.SUPERVISOR]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    agents = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0, "password_hash": 0}
+    ).to_list(100)
+
+    now = datetime.now(timezone.utc)
+    result = []
+    for agent in agents:
+        last_seen = agent.get("last_seen")
+        is_online = agent.get("is_online", False)
+
+        if last_seen and is_online:
+            try:
+                last_seen_dt = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+                minutes_ago = (now - last_seen_dt).total_seconds() / 60
+                if minutes_ago > 3:
+                    is_online = False
+            except Exception:
+                is_online = False
+
+        result.append({
+            "id": agent["id"],
+            "name": agent["name"],
+            "email": agent["email"],
+            "is_online": is_online,
+            "last_seen": last_seen,
+        })
+
+    return result
+
+
+@api_router.get("/my-appointments")
+async def get_my_appointments(date: Optional[str] = None, current_user: User = Depends(get_current_user)):
+    query = {"user_id": current_user.id}
+    if date:
+        query["date"] = date
+
+    appointments = await db.appointments.find(
+        query,
+        {"_id": 0}
+    ).sort([("date", 1), ("time_slot", 1)]).to_list(500)
+
+    return appointments
+
+
+@api_router.get("/my-appointments/stats")
+async def get_my_appointments_stats(current_user: User = Depends(get_current_user)):
+    total = await db.appointments.count_documents({"user_id": current_user.id})
+    emitidos = await db.appointments.count_documents({
+        "user_id": current_user.id,
+        "status": "emitido"
+    })
+    confirmados = await db.appointments.count_documents({
+        "user_id": current_user.id,
+        "status": "confirmado"
+    })
+    pendentes = await db.appointments.count_documents({
+        "user_id": current_user.id,
+        "status": "pendente_atribuicao"
+    })
+
+    return {
+        "total": total,
+        "emitidos": emitidos,
+        "confirmados": confirmados,
+        "pendentes": pendentes,
+    }
+
+
+EXTRA_TIME_SLOTS = ["07:40", "12:40", "18:00", "18:20", "18:40"]
+
+@api_router.get("/extra-hours")
+async def get_extra_hours(date: str, current_user: User = Depends(get_current_user)):
+    doc = await db.extra_hours.find_one({"date": date}, {"_id": 0})
+    return {
+        "date": date,
+        "available_slots": EXTRA_TIME_SLOTS,
+        "active_slots": doc.get("slots", []) if doc else [],
+    }
+
+
+@api_router.put("/extra-hours")
+async def update_extra_hours(
+    date: str,
+    slots: List[str] = Query(default=[]),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem gerenciar horários extras")
+
+    valid_slots = [s for s in slots if s in EXTRA_TIME_SLOTS]
+
+    await db.extra_hours.update_one(
+        {"date": date},
+        {
+            "$set": {
+                "date": date,
+                "slots": valid_slots,
+                "updated_by": current_user.id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+        upsert=True,
+    )
+
+    return {
+        "date": date,
+        "active_slots": valid_slots,
+        "message": f"{len(valid_slots)} horário(s) extra(s) ativado(s)",
     }
     
 
