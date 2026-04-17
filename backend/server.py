@@ -88,7 +88,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 origins = [
     "http://localhost:3000",
-    "http://localhost:5173",
     "https://agenda-ops.vercel.app",
 ]
 
