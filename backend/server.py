@@ -434,6 +434,98 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
     return Appointment(**apt_doc)
 
 
+@api_router.get("/appointments/pending", response_model=List[Appointment])
+async def get_pending_appointments(current_user: User = Depends(get_current_user)):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(
+            status_code=403,
+            detail="Apenas supervisores têm acesso aos agendamentos pendentes",
+        )
+
+    appointments = await db.appointments.find(
+        {"status": "pendente_atribuicao"},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(1000)
+
+    return [Appointment(**apt) for apt in appointments]
+
+@api_router.get("/appointments/available-slots")
+async def get_available_slots(
+    date: str,
+    emission_system: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    now = datetime.now()
+    today = now.date().isoformat()
+    current_time = now.strftime("%H:%M")
+
+    if emission_system and emission_system not in ["safeweb", "serpro"]:
+        raise HTTPException(status_code=400, detail="Sistema de emissão inválido")
+
+    normal_time_slots = [
+        "08:00", "08:20", "08:40",
+        "09:00", "09:20", "09:40",
+        "10:00", "10:20", "10:40",
+        "11:00", "11:20", "11:40",
+        "12:00", "12:20",
+        "13:00", "13:20", "13:40",
+        "14:00", "14:20", "14:40",
+        "15:00", "15:20", "15:40",
+        "16:00", "16:20", "16:40",
+        "17:00", "17:20", "17:40",
+    ]
+
+    extra_hours_doc = await db.extra_hours.find_one({"date": date})
+    extra_slots = extra_hours_doc.get("slots", []) if extra_hours_doc else []
+
+    time_slots = sorted(set(normal_time_slots + extra_slots))
+
+    agent_query = {"role": UserRole.AGENTE, "approved": True}
+    if emission_system:
+        agent_query[f"can_{emission_system}"] = True
+
+    agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
+    total_agents = len(agents)
+
+    available_slots = []
+
+    for slot in time_slots:
+        if date == today and slot < current_time:
+            continue
+        if date < today:
+            continue
+
+        occupied = await db.appointments.count_documents({
+            "date": date,
+            "time_slot": slot,
+            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
+        })
+
+        reserved = await db.appointments.count_documents({
+            "date": date,
+            "time_slot": slot,
+            "status": "pendente_atribuicao",
+        })
+
+        available = total_agents - occupied
+
+        if available > 0:
+            available_slots.append({
+                "time_slot": slot,
+                "available_agents": available,
+                "total_agents": total_agents,
+                "reserved": reserved,
+                "status": "available",
+            })
+
+    return {
+        "date": date,
+        "emission_system": emission_system,
+        "total_agents_with_permission": total_agents,
+        "available_slots": available_slots,
+    }
+
+
 @api_router.put("/appointments/{apt_id}/assign", response_model=Appointment)
 async def assign_appointment(apt_id: str, assign_data: AppointmentAssign, current_user: User = Depends(get_current_user)):
     if current_user.role != UserRole.SUPERVISOR:
@@ -646,153 +738,6 @@ from zoneinfo import ZoneInfo
 
 BR_TZ = ZoneInfo("America/Sao_Paulo")
 EXTRA_TIME_SLOTS = ["07:40", "12:40", "18:00", "18:20", "18:40"]
-
-
-@api_router.get("/appointments/pending", response_model=List[Appointment])
-async def get_pending_appointments(current_user: User = Depends(get_current_user)):
-    if current_user.role != UserRole.SUPERVISOR:
-        raise HTTPException(
-            status_code=403,
-            detail="Apenas supervisores têm acesso aos agendamentos pendentes",
-        )
-
-    appointments = await db.appointments.find(
-        {"status": "pendente_atribuicao"},
-        {"_id": 0},
-    ).sort("created_at", -1).to_list(1000)
-
-    return [Appointment(**apt) for apt in appointments]
-
-
-@api_router.get("/appointments/available-slots")
-async def get_available_slots(
-    date: str,
-    emission_system: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
-):
-    now = datetime.now()
-    today = now.date().isoformat()
-    current_time = now.strftime("%H:%M")
-
-    if emission_system and emission_system not in ["safeweb", "serpro"]:
-        raise HTTPException(status_code=400, detail="Sistema de emissão inválido")
-
-    normal_time_slots = [
-        "08:00", "08:20", "08:40",
-        "09:00", "09:20", "09:40",
-        "10:00", "10:20", "10:40",
-        "11:00", "11:20", "11:40",
-        "12:00", "12:20",
-        "13:00", "13:20", "13:40",
-        "14:00", "14:20", "14:40",
-        "15:00", "15:20", "15:40",
-        "16:00", "16:20", "16:40",
-        "17:00", "17:20", "17:40",
-    ]
-
-    extra_hours_doc = await db.extra_hours.find_one({"date": date})
-    extra_slots = extra_hours_doc.get("slots", []) if extra_hours_doc else []
-
-    time_slots = sorted(set(normal_time_slots + extra_slots))
-
-    agent_query = {"role": UserRole.AGENTE, "approved": True}
-    if emission_system:
-        agent_query[f"can_{emission_system}"] = True
-
-    agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
-    total_agents = len(agents)
-
-    available_slots = []
-
-    for slot in time_slots:
-        if date == today and slot < current_time:
-            continue
-        if date < today:
-            continue
-
-        occupied = await db.appointments.count_documents({
-            "date": date,
-            "time_slot": slot,
-            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
-        })
-
-        reserved = await db.appointments.count_documents({
-            "date": date,
-            "time_slot": slot,
-            "status": "pendente_atribuicao",
-        })
-
-        available = total_agents - occupied
-
-        if available > 0:
-            available_slots.append({
-                "time_slot": slot,
-                "available_agents": available,
-                "total_agents": total_agents,
-                "reserved": reserved,
-                "status": "available",
-            })
-
-    return {
-        "date": date,
-        "emission_system": emission_system,
-        "total_agents_with_permission": total_agents,
-        "available_slots": available_slots,
-    }
-
-
-@api_router.get("/slots/all")
-async def get_all_slots(date: str, current_user: User = Depends(get_current_user)):
-    normal_slots = [
-        "08:00", "08:20", "08:40",
-        "09:00", "09:20", "09:40",
-        "10:00", "10:20", "10:40",
-        "11:00", "11:20", "11:40",
-        "12:00", "12:20",
-        "13:00", "13:20", "13:40",
-        "14:00", "14:20", "14:40",
-        "15:00", "15:20", "15:40",
-        "16:00", "16:20", "16:40",
-        "17:00", "17:20", "17:40",
-    ]
-
-    extra_doc = await db.extra_hours.find_one({"date": date})
-    extra_slots = extra_doc.get("slots", []) if extra_doc else []
-
-    all_slots = sorted(set(normal_slots + extra_slots))
-
-    agents = await db.users.find(
-        {"role": UserRole.AGENTE, "approved": True},
-        {"_id": 0},
-    ).to_list(100)
-    total_agents = len(agents)
-
-    appointments = await db.appointments.find(
-        {"date": date},
-        {"_id": 0},
-    ).to_list(1000)
-
-    result = []
-    for slot in all_slots:
-        slot_appointments = [a for a in appointments if a.get("time_slot") == slot and a.get("status") != "cancelado"]
-        occupied = len([a for a in slot_appointments if a.get("status") != "pendente_atribuicao"])
-        pending = len([a for a in slot_appointments if a.get("status") == "pendente_atribuicao"])
-        available = total_agents - occupied
-
-        result.append({
-            "time_slot": slot,
-            "total_agents": total_agents,
-            "occupied": occupied,
-            "pending": pending,
-            "available": max(0, available),
-            "appointments": slot_appointments,
-        })
-
-    return {
-        "date": date,
-        "total_agents": total_agents,
-        "slots": result,
-    }
 
 
 @api_router.get("/stats/dashboard")
