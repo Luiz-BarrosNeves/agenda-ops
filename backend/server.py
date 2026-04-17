@@ -976,3 +976,9 @@ app.include_router(api_router)
 @app.on_event("shutdown")
 async def shutdown_event():
     client.close()
+
+print("ROTA TESTE CARREGADA")
+
+@api_router.get("/test-route")
+async def test_route():
+    return {"ok": True}
