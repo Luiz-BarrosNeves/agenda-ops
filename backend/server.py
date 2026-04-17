@@ -763,15 +763,9 @@ async def get_available_slots(
     emission_system: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Obter horários disponíveis para uma data.
-    Se emission_system for especificado (safeweb/serpro), retorna apenas horários
-    onde há agentes com permissão disponíveis.
-    """
-    now_br = datetime.now(BR_TZ)
-    today_br = now_br.date().isoformat()
-    current_time_br = now_br.strftime("%H:%M")
-    datetime.fromisoformat(date).date()  # valida a data
+    now = datetime.now()
+    today = now.date().isoformat()
+    current_time = now.strftime("%H:%M")
 
     if emission_system and emission_system not in ["safeweb", "serpro"]:
         raise HTTPException(status_code=400, detail="Sistema de emissão inválido")
@@ -799,28 +793,17 @@ async def get_available_slots(
         agent_query[f"can_{emission_system}"] = True
 
     agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
-    agent_ids = [a["id"] for a in agents]
-    total_agents_with_permission = len(agents)
-
-    all_agents = await db.users.find(
-        {"role": UserRole.AGENTE, "approved": True},
-        {"_id": 0},
-    ).to_list(100)
-    total_all_agents = len(all_agents)
+    total_agents = len(agents)
 
     available_slots = []
 
     for slot in time_slots:
-        datetime.fromisoformat(f"{date}T{slot}:00").replace(tzinfo=BR_TZ)
-
-        if date == today_br and slot < current_time_br:
+        if date == today and slot < current_time:
             continue
-        if date < today_br:
-            continue
-        if total_all_agents == 0:
+        if date < today:
             continue
 
-        occupied_total = await db.appointments.count_documents({
+        occupied = await db.appointments.count_documents({
             "date": date,
             "time_slot": slot,
             "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
@@ -832,82 +815,27 @@ async def get_available_slots(
             "status": "pendente_atribuicao",
         })
 
-        if emission_system:
-            occupied_with_permission = await db.appointments.count_documents({
-                "date": date,
+        available = total_agents - occupied
+
+        if available > 0:
+            available_slots.append({
                 "time_slot": slot,
-                "user_id": {"$in": agent_ids},
-                "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
+                "available_agents": available,
+                "total_agents": total_agents,
+                "reserved": reserved,
+                "status": "available",
             })
-
-            available_with_permission = total_agents_with_permission - occupied_with_permission
-
-            can_redistribute = False
-            if available_with_permission <= 0 and total_agents_with_permission > 0:
-                redistributable = await db.appointments.count_documents({
-                    "date": date,
-                    "time_slot": slot,
-                    "user_id": {"$in": agent_ids},
-                    "$or": [
-                        {"emission_system": None},
-                        {"emission_system": {"$exists": False}},
-                    ],
-                    "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
-                })
-
-                agents_without_permission = await db.users.count_documents({
-                    "role": UserRole.AGENTE,
-                    "approved": True,
-                    f"can_{emission_system}": {"$ne": True},
-                })
-
-                occupied_without_permission = await db.appointments.count_documents({
-                    "date": date,
-                    "time_slot": slot,
-                    "user_id": {"$nin": agent_ids},
-                    "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
-                })
-
-                available_without_permission = agents_without_permission - occupied_without_permission
-
-                if redistributable > 0 and available_without_permission > 0:
-                    can_redistribute = True
-
-            if available_with_permission > 0 or can_redistribute:
-                available_slots.append({
-                    "time_slot": slot,
-                    "available_agents": max(0, available_with_permission),
-                    "total_agents": total_agents_with_permission,
-                    "reserved": reserved,
-                    "status": "available" if available_with_permission > 0 else "redistribution_needed",
-                    "can_redistribute": can_redistribute,
-                    "requires_permission": emission_system,
-                })
-        else:
-            available = total_all_agents - occupied_total
-
-            if available > 0:
-                available_slots.append({
-                    "time_slot": slot,
-                    "available_agents": available,
-                    "total_agents": total_all_agents,
-                    "reserved": reserved,
-                    "status": "available",
-                })
 
     return {
         "date": date,
         "emission_system": emission_system,
-        "total_agents_with_permission": total_agents_with_permission if emission_system else total_all_agents,
+        "total_agents_with_permission": total_agents,
         "available_slots": available_slots,
     }
 
 
 @api_router.get("/slots/all")
 async def get_all_slots(date: str, current_user: User = Depends(get_current_user)):
-    """
-    Obter todos os slots do dia (normais + extras) com status de ocupação
-    """
     normal_slots = [
         "08:00", "08:20", "08:40",
         "09:00", "09:20", "09:40",
@@ -932,25 +860,17 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
     ).to_list(100)
     total_agents = len(agents)
 
-    now_br = datetime.now(BR_TZ)
-    today = now_br.date().isoformat()
-    current_time = now_br.strftime("%H:%M")
+    appointments = await db.appointments.find(
+        {"date": date},
+        {"_id": 0},
+    ).to_list(1000)
 
     result = []
     for slot in all_slots:
-        appointments = await db.appointments.find({
-            "date": date,
-            "time_slot": slot,
-            "status": {"$ne": "cancelado"},
-        }, {"_id": 0}).to_list(100)
-
-        occupied = len([a for a in appointments if a.get("status") != "pendente_atribuicao"])
-        pending = len([a for a in appointments if a.get("status") == "pendente_atribuicao"])
+        slot_appointments = [a for a in appointments if a.get("time_slot") == slot and a.get("status") != "cancelado"]
+        occupied = len([a for a in slot_appointments if a.get("status") != "pendente_atribuicao"])
+        pending = len([a for a in slot_appointments if a.get("status") == "pendente_atribuicao"])
         available = total_agents - occupied
-
-        is_current = date == today and slot == current_time[:5]
-        is_past = date < today or (date == today and slot < current_time)
-        is_extra = slot in EXTRA_TIME_SLOTS
 
         result.append({
             "time_slot": slot,
@@ -958,10 +878,7 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
             "occupied": occupied,
             "pending": pending,
             "available": max(0, available),
-            "is_current": is_current,
-            "is_past": is_past,
-            "is_extra": is_extra,
-            "appointments": appointments,
+            "appointments": slot_appointments,
         })
 
     return {
@@ -969,12 +886,6 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
         "total_agents": total_agents,
         "slots": result,
     }
-
-print("ROTA TESTE CARREGADA")
-
-@api_router.get("/test-route")
-async def test_route():
-    return {"ok": True}
     
 
 app.include_router(api_router)
