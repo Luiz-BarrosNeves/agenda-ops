@@ -16,6 +16,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, ConfigDict
 from passlib.hash import bcrypt
 
+print("SERVER.PY FOI CARREGADO")
+
 ROOT_DIR = Path(__file__).resolve().parent
 load_dotenv(ROOT_DIR / ".env")
 
