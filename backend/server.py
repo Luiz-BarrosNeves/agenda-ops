@@ -640,38 +640,6 @@ from typing import List
 
 
 
-# =========================
-# ALL SLOTS
-# =========================
-@api_router.get("/slots/all")
-async def get_all_slots(date: str, current_user: User = Depends(get_current_user)):
-    slots = await db.appointments.find(
-        {"date": date}, {"_id": 0}
-    ).to_list(500)
-
-    return slots
-
-# =========================
-# AVAILABLE SLOTS
-# =========================
-@api_router.get("/appointments/available-slots")
-async def get_available_slots(date: str, current_user: User = Depends(get_current_user)):
-    slots = await db.appointments.find(
-        {"date": date, "status": "available"}, {"_id": 0}
-    ).to_list(500)
-
-    return slots
-
-# =========================
-# PENDING APPOINTMENTS
-# =========================
-@api_router.get("/appointments/pending")
-async def get_pending_appointments(current_user: User = Depends(get_current_user)):
-    pending = await db.appointments.find(
-        {"status": "pending"}, {"_id": 0}
-    ).to_list(100)
-
-    return pending
 
 
 from zoneinfo import ZoneInfo
