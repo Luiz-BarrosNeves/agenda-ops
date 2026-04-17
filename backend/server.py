@@ -970,15 +970,16 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
         "slots": result,
     }
 
+print("ROTA TESTE CARREGADA")
+
+@api_router.get("/test-route")
+async def test_route():
+    return {"ok": True}
+    
+
 app.include_router(api_router)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     client.close()
-
-print("ROTA TESTE CARREGADA")
-
-@api_router.get("/test-route")
-async def test_route():
-    return {"ok": True}
