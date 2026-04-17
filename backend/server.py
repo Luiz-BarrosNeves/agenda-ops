@@ -86,35 +86,16 @@ app = FastAPI()
 
 from fastapi.middleware.cors import CORSMiddleware
 
-origins = [
-    "http://localhost:3000",
-    "https://agenda-ops.vercel.app",
-]
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# CORS para frontend local
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000","http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-# CORS para frontend local
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 api_router = APIRouter(prefix="/api")
 api_router.include_router(users_router, prefix="/users")
 security = HTTPBearer()
