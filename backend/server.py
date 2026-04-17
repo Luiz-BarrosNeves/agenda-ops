@@ -42,9 +42,11 @@ security = HTTPBearer()
 
 app = FastAPI(title="AgendaOps API")
 
+print("CORS_ORIGINS:", CORS_ORIGINS)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS or ["http://localhost:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
