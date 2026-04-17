@@ -82,19 +82,33 @@ db = client[os.environ['DB_NAME']]
 
 # Criação do app FastAPI
 # Criação do app FastAPI
-app = FastAPI()
-
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
+# ⚠️ CORS precisa vir IMEDIATAMENTE após criar o app
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=[
+        "https://agenda-ops.vercel.app",
+        "https://agenda-ops-git-main-luiz-neves-projects.vercel.app",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi import APIRouter
+from app.routes.users import router as users_router
+from app.routes.auth import router as auth_router
+
+api_router = APIRouter(prefix="/api")
+api_router.include_router(auth_router, prefix="/auth")
+api_router.include_router(users_router, prefix="/users")
+
+app.include_router(api_router)
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(users_router, prefix="/users")
