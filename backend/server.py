@@ -966,6 +966,151 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
         "slots": result,
     }
 
+class ChangePasswordRequest(BaseModel):
+    current_password: Optional[str] = None
+    new_password: str
+    confirm_password: str
+
+
+@api_router.get("/users/{user_id}", response_model=User)
+async def get_user_by_id(user_id: str, current_user: User = Depends(get_current_user)):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return User(**user)
+
+
+@api_router.get("/users/stats/team")
+async def get_team_stats(current_user: User = Depends(get_current_user)):
+    if current_user.role not in [UserRole.ADMIN, UserRole.SUPERVISOR]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    users = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0}
+    ).to_list(100)
+
+    stats = []
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    for user in users:
+        appointments = await db.appointments.find(
+            {
+                "user_id": user["id"],
+                "date": today,
+                "status": {"$ne": "cancelado"},
+            },
+            {"_id": 0},
+        ).to_list(1000)
+
+        total_sessions = len(appointments)
+
+        stats.append({
+            "user_id": user["id"],
+            "name": user["name"],
+            "avatar_url": user.get("avatar_url"),
+            "total_appointments": total_sessions,
+            "total_sessions": total_sessions,
+            "status": (
+                "overloaded" if total_sessions > 15
+                else "available" if total_sessions < 8
+                else "normal"
+            ),
+        })
+
+    return stats
+
+
+@api_router.get("/users/with-permission/{system}", response_model=List[User])
+async def get_users_with_permission(system: str, current_user: User = Depends(get_current_user)):
+    if system not in ["safeweb", "serpro"]:
+        raise HTTPException(status_code=400, detail="Sistema deve ser safeweb ou serpro")
+
+    field = f"can_{system}"
+    users = await db.users.find(
+        {
+            field: True,
+            "role": UserRole.AGENTE,
+            "approved": True,
+        },
+        {"_id": 0, "password_hash": 0},
+    ).to_list(100)
+
+    return [User(**u) for u in users]
+
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, current_user: User = Depends(get_current_user)):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Only supervisors can delete users")
+
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+
+    result = await db.users.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"message": "User deleted successfully"}
+
+
+@api_router.put("/users/me/password")
+async def change_my_password(
+    data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if data.new_password != data.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    user = await db.users.find_one({"id": current_user.id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not data.current_password:
+        raise HTTPException(status_code=400, detail="Current password is required")
+
+    if not bcrypt.verify(data.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    new_hash = bcrypt.hash(data.new_password)
+
+    await db.users.update_one(
+        {"id": current_user.id},
+        {"$set": {"password_hash": new_hash}}
+    )
+
+    return {"message": "Password updated successfully"}
+
+
+@api_router.put("/users/{user_id}/password")
+async def reset_user_password(
+    user_id: str,
+    data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Only supervisors can reset user passwords")
+
+    if data.new_password != data.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    new_hash = bcrypt.hash(data.new_password)
+
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"password_hash": new_hash}}
+    )
+
+    return {"message": "Password reset successfully"}
+
 app.include_router(api_router)
 
 
