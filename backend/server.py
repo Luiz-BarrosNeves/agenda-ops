@@ -1690,32 +1690,7 @@ async def delete_blocked_slot(
 
     return {"message": "Bloqueio removido com sucesso"}
 
-@api_router.get("/reports/daily")
-async def get_daily_report(
-    date: str,
-    current_user: User = Depends(get_current_user),
-):
-    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
-        raise HTTPException(status_code=403, detail="Not authorized")
 
-    appointments = await db.appointments.find(
-        {"date": date},
-        {"_id": 0}
-    ).to_list(1000)
-
-    total = len(appointments)
-    by_status: Dict[str, int] = {}
-
-    for apt in appointments:
-        status = apt.get("status", "unknown")
-        by_status[status] = by_status.get(status, 0) + 1
-
-    return {
-        "date": date,
-        "total": total,
-        "by_status": by_status,
-        "appointments": appointments,
-    }
 
 
 @api_router.get("/reports/weekly-hours")
@@ -1790,8 +1765,8 @@ async def export_daily_csv(
     return response
 
 
-@api_router.get("/reports/weekly-hours/csv")
-async def export_weekly_hours_csv(
+@api_router.get("/reports/weekly-hours")
+async def get_weekly_hours(
     current_user: User = Depends(get_current_user),
 ):
     if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
@@ -1802,14 +1777,7 @@ async def export_weekly_hours_csv(
         {"_id": 0}
     ).to_list(100)
 
-    output = StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow([
-        "ID",
-        "Nome",
-        "Total Sessões",
-    ])
+    result = []
 
     for agent in agents:
         count = await db.appointments.count_documents({
@@ -1817,16 +1785,19 @@ async def export_weekly_hours_csv(
             "status": {"$ne": "cancelado"}
         })
 
-        writer.writerow([
-            agent["id"],
-            agent["name"],
-            count,
-        ])
+        result.append({
+            "user_id": agent["id"],
+            "id": agent["id"],
+            "name": agent["name"],
+            "total_sessions": count,
+            "total_appointments": count,
+        })
 
-    response = Response(content=output.getvalue(), media_type="text/csv")
-    response.headers["Content-Disposition"] = 'attachment; filename="weekly_hours.csv"'
-
-    return response
+    return {
+        "agents": result,
+        "total_appointments": sum(item["total_appointments"] for item in result),
+        "total_sessions": sum(item["total_sessions"] for item in result),
+    }
 
 class TemplateCreate(BaseModel):
     name: str
