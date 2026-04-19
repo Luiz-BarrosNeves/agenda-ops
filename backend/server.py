@@ -529,6 +529,47 @@ async def get_available_slots(
         "available_slots": available_slots,
     }
 
+@api_router.get("/appointments/filtered")
+async def get_filtered_appointments(
+    search: Optional[str] = None,
+    date: Optional[str] = None,
+    status: Optional[str] = None,
+    user_id: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    protocol_number: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+
+    if current_user.role == UserRole.AGENTE:
+        query["user_id"] = current_user.id
+
+    if date:
+        query["date"] = date
+    if status:
+        query["status"] = status
+    if user_id and current_user.role in [UserRole.ADMIN, UserRole.SUPERVISOR]:
+        query["user_id"] = user_id
+
+    if first_name:
+        query["first_name"] = {"$regex": first_name, "$options": "i"}
+    if last_name:
+        query["last_name"] = {"$regex": last_name, "$options": "i"}
+    if protocol_number:
+        query["protocol_number"] = {"$regex": protocol_number, "$options": "i"}
+
+    if search:
+        query["$or"] = [
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
+            {"protocol_number": {"$regex": search, "$options": "i"}},
+        ]
+
+    items = await db.appointments.find(query, {"_id": 0}) \
+        .sort([("date", 1), ("time_slot", 1)]).to_list(1000)
+
+    return items
 
 @api_router.put("/appointments/{apt_id}/assign", response_model=Appointment)
 async def assign_appointment(apt_id: str, assign_data: AppointmentAssign, current_user: User = Depends(get_current_user)):
