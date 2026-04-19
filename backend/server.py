@@ -904,7 +904,68 @@ async def update_extra_hours(
         "active_slots": valid_slots,
         "message": f"{len(valid_slots)} horário(s) extra(s) ativado(s)",
     }
-    
+
+@api_router.get("/slots/all")
+async def get_all_slots(date: str, current_user: User = Depends(get_current_user)):
+    normal_slots = [
+        "08:00", "08:20", "08:40",
+        "09:00", "09:20", "09:40",
+        "10:00", "10:20", "10:40",
+        "11:00", "11:20", "11:40",
+        "12:00", "12:20",
+        "13:00", "13:20", "13:40",
+        "14:00", "14:20", "14:40",
+        "15:00", "15:20", "15:40",
+        "16:00", "16:20", "16:40",
+        "17:00", "17:20", "17:40",
+    ]
+
+    extra_doc = await db.extra_hours.find_one({"date": date})
+    extra_slots = extra_doc.get("slots", []) if extra_doc else []
+
+    all_slots = sorted(set(normal_slots + extra_slots))
+
+    agents = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0},
+    ).to_list(100)
+    total_agents = len(agents)
+
+    appointments = await db.appointments.find(
+        {"date": date},
+        {"_id": 0},
+    ).to_list(1000)
+
+    result = []
+    for slot in all_slots:
+        slot_appointments = [
+            a for a in appointments
+            if a.get("time_slot") == slot and a.get("status") != "cancelado"
+        ]
+        occupied = len([
+            a for a in slot_appointments
+            if a.get("status") != "pendente_atribuicao"
+        ])
+        pending = len([
+            a for a in slot_appointments
+            if a.get("status") == "pendente_atribuicao"
+        ])
+        available = total_agents - occupied
+
+        result.append({
+            "time_slot": slot,
+            "total_agents": total_agents,
+            "occupied": occupied,
+            "pending": pending,
+            "available": max(0, available),
+            "appointments": slot_appointments,
+        })
+
+    return {
+        "date": date,
+        "total_agents": total_agents,
+        "slots": result,
+    }
 
 app.include_router(api_router)
 
