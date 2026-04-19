@@ -1715,12 +1715,17 @@ async def get_weekly_hours(
 
         result.append({
             "user_id": agent["id"],
+            "id": agent["id"],
             "name": agent["name"],
             "total_sessions": count,
+            "total_appointments": count,
         })
 
-    return result
-
+    return {
+        "agents": result,
+        "total_appointments": sum(item["total_appointments"] for item in result),
+        "total_sessions": sum(item["total_sessions"] for item in result),
+    }
 
 @api_router.get("/reports/daily")
 async def get_daily_report(
@@ -1751,39 +1756,6 @@ async def get_daily_report(
     }
 
 
-@api_router.get("/reports/weekly-hours")
-async def get_weekly_hours(
-    current_user: User = Depends(get_current_user),
-):
-    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    agents = await db.users.find(
-        {"role": UserRole.AGENTE, "approved": True},
-        {"_id": 0}
-    ).to_list(100)
-
-    result = []
-
-    for agent in agents:
-        count = await db.appointments.count_documents({
-            "user_id": agent["id"],
-            "status": {"$ne": "cancelado"}
-        })
-
-        result.append({
-            "user_id": agent["id"],
-            "id": agent["id"],
-            "name": agent["name"],
-            "total_sessions": count,
-            "total_appointments": count,
-        })
-
-    return {
-        "agents": result,
-        "total_appointments": sum(item["total_appointments"] for item in result),
-        "total_sessions": sum(item["total_sessions"] for item in result),
-    }
 
 class TemplateCreate(BaseModel):
     name: str
