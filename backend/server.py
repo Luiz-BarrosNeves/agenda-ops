@@ -804,11 +804,13 @@ async def get_dashboard_stats(date: Optional[str] = None, current_user: User = D
             "date": target_date,
             "status": {"$ne": "cancelado"}
         })
-        agent_stats.append({
-            "id": agent["id"],
-            "name": agent["name"],
-            "appointments": count
-        })
+agent_stats.append({
+    "id": agent["id"],
+    "name": agent["name"],
+    "appointments": count,
+    "total_appointments": count,
+    "total_sessions": count,
+})
 
     return {
         "date": target_date,
