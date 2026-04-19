@@ -5,6 +5,7 @@ import logging
 import jwt
 
 
+from typing import List
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query
