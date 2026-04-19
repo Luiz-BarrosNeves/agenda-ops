@@ -2,8 +2,9 @@ import os
 import uuid
 import shutil
 import logging
-import jwt
+import jwtimport csv
 
+from io import StringIO
 from zoneinfo import ZoneInfo
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
@@ -1644,8 +1645,146 @@ async def delete_blocked_slot(
         raise HTTPException(status_code=404, detail="Blocked slot not found")
 
     return {"message": "Bloqueio removido com sucesso"}
-    
-    
+
+@api_router.get("/reports/daily")
+async def get_daily_report(
+    date: str,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    appointments = await db.appointments.find(
+        {"date": date},
+        {"_id": 0}
+    ).to_list(1000)
+
+    total = len(appointments)
+    by_status: Dict[str, int] = {}
+
+    for apt in appointments:
+        status = apt.get("status", "unknown")
+        by_status[status] = by_status.get(status, 0) + 1
+
+    return {
+        "date": date,
+        "total": total,
+        "by_status": by_status,
+        "appointments": appointments,
+    }
+
+
+@api_router.get("/reports/weekly-hours")
+async def get_weekly_hours(
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    agents = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0}
+    ).to_list(100)
+
+    result = []
+
+    for agent in agents:
+        count = await db.appointments.count_documents({
+            "user_id": agent["id"],
+            "status": {"$ne": "cancelado"}
+        })
+
+        result.append({
+            "user_id": agent["id"],
+            "name": agent["name"],
+            "total_sessions": count,
+        })
+
+    return result
+
+
+@api_router.get("/reports/daily/csv")
+async def export_daily_csv(
+    date: str,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    appointments = await db.appointments.find(
+        {"date": date},
+        {"_id": 0}
+    ).to_list(1000)
+
+    output = StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "ID",
+        "Nome",
+        "Sobrenome",
+        "Data",
+        "Horário",
+        "Status",
+        "Agente",
+    ])
+
+    for apt in appointments:
+        writer.writerow([
+            apt.get("id"),
+            apt.get("first_name"),
+            apt.get("last_name"),
+            apt.get("date"),
+            apt.get("time_slot"),
+            apt.get("status"),
+            apt.get("user_id"),
+        ])
+
+    response = Response(content=output.getvalue(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f'attachment; filename="report_{date}.csv"'
+
+    return response
+
+
+@api_router.get("/reports/weekly-hours/csv")
+async def export_weekly_hours_csv(
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    agents = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0}
+    ).to_list(100)
+
+    output = StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "ID",
+        "Nome",
+        "Total Sessões",
+    ])
+
+    for agent in agents:
+        count = await db.appointments.count_documents({
+            "user_id": agent["id"],
+            "status": {"$ne": "cancelado"}
+        })
+
+        writer.writerow([
+            agent["id"],
+            agent["name"],
+            count,
+        ])
+
+    response = Response(content=output.getvalue(), media_type="text/csv")
+    response.headers["Content-Disposition"] = 'attachment; filename="weekly_hours.csv"'
+
+    return response
+
+
 app.include_router(api_router)
 
 
