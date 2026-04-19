@@ -1700,6 +1700,11 @@ async def get_weekly_hours(
     if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    today = datetime.now(timezone.utc).date()
+    weekday = today.weekday()  # segunda=0
+    week_start = today - timedelta(days=weekday)
+    week_end = week_start + timedelta(days=6)
+
     agents = await db.users.find(
         {"role": UserRole.AGENTE, "approved": True},
         {"_id": 0}
@@ -1708,23 +1713,48 @@ async def get_weekly_hours(
     result = []
 
     for agent in agents:
-        count = await db.appointments.count_documents({
-            "user_id": agent["id"],
-            "status": {"$ne": "cancelado"}
-        })
+        appointments = await db.appointments.find(
+            {
+                "user_id": agent["id"],
+                "date": {
+                    "$gte": week_start.isoformat(),
+                    "$lte": week_end.isoformat(),
+                },
+                "status": {"$ne": "cancelado"},
+            },
+            {"_id": 0}
+        ).to_list(1000)
+
+        emitidos = len([a for a in appointments if a.get("status") == "emitido"])
+        hours_worked = emitidos  # ajuste aqui depois se a regra real for outra
+        weekly_target = 40
+        balance = hours_worked - weekly_target
+
+        is_online = agent.get("is_online", False)
+        last_seen = agent.get("last_seen")
+        if last_seen and is_online:
+            try:
+                last_seen_dt = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+                minutes_ago = (datetime.now(timezone.utc) - last_seen_dt).total_seconds() / 60
+                if minutes_ago > 3:
+                    is_online = False
+            except Exception:
+                is_online = False
 
         result.append({
-            "user_id": agent["id"],
             "id": agent["id"],
             "name": agent["name"],
-            "total_sessions": count,
-            "total_appointments": count,
+            "is_online": is_online,
+            "emitidos": emitidos,
+            "hours_worked": hours_worked,
+            "weekly_target": weekly_target,
+            "balance": balance,
         })
 
     return {
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
         "agents": result,
-        "total_appointments": sum(item["total_appointments"] for item in result),
-        "total_sessions": sum(item["total_sessions"] for item in result),
     }
 
 @api_router.get("/reports/daily")
@@ -1740,21 +1770,55 @@ async def get_daily_report(
         {"_id": 0}
     ).to_list(1000)
 
-    total = len(appointments)
-    by_status: Dict[str, int] = {}
+    total_appointments = len(appointments)
 
+    by_status: Dict[str, int] = {}
     for apt in appointments:
         status = apt.get("status", "unknown")
         by_status[status] = by_status.get(status, 0) + 1
 
+    agents = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0}
+    ).to_list(100)
+
+    agent_rows = []
+    total_hours_worked = 0
+
+    for agent in agents:
+        agent_appointments = [
+            apt for apt in appointments
+            if apt.get("user_id") == agent["id"] and apt.get("status") != "cancelado"
+        ]
+
+        agent_by_status: Dict[str, int] = {}
+        for apt in agent_appointments:
+            status = apt.get("status", "unknown")
+            agent_by_status[status] = agent_by_status.get(status, 0) + 1
+
+        emitidos = agent_by_status.get("emitido", 0)
+        hours_worked = emitidos  # ajuste aqui depois se sua regra de horas for diferente
+
+        total_hours_worked += hours_worked
+
+        agent_rows.append({
+            "id": agent["id"],
+            "name": agent["name"],
+            "total": len(agent_appointments),
+            "by_status": agent_by_status,
+            "hours_worked": hours_worked,
+        })
+
     return {
-        "date": date,
-        "total": total,
-        "total_appointments": total,
-        "by_status": by_status,
+        "summary": {
+            "total_appointments": total_appointments,
+            "by_status": by_status,
+            "total_hours_worked": total_hours_worked,
+            "auto_assigned": 0,
+        },
+        "agents": agent_rows,
         "appointments": appointments,
     }
-
 
 
 class TemplateCreate(BaseModel):
