@@ -1784,7 +1784,194 @@ async def export_weekly_hours_csv(
 
     return response
 
+class TemplateCreate(BaseModel):
+    name: str
+    content: str
+    category: Optional[str] = "general"
+    is_active: bool = True
 
+
+class TemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@api_router.post("/templates")
+async def create_template(
+    data: TemplateCreate,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    existing = await db.templates.find_one({"name": data.name}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Já existe um template com esse nome")
+
+    template = {
+        "id": str(uuid.uuid4()),
+        "name": data.name,
+        "content": data.content,
+        "category": data.category or "general",
+        "is_active": data.is_active,
+        "usage_count": 0,
+        "created_by": current_user.id,
+        "created_by_name": current_user.name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    await db.templates.insert_one(template)
+    return {"message": "Template criado com sucesso", "template": template}
+
+
+@api_router.get("/templates")
+async def get_templates(
+    category: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    current_user: User = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+
+    if category:
+        query["category"] = category
+    if is_active is not None:
+        query["is_active"] = is_active
+
+    items = await db.templates.find(query, {"_id": 0}) \
+        .sort("name", 1).to_list(500)
+
+    return items
+
+
+@api_router.get("/templates/{template_id}")
+async def get_template_by_id(
+    template_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    template = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    return template
+
+
+@api_router.put("/templates/{template_id}")
+async def update_template(
+    template_id: str,
+    data: TemplateUpdate,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    template = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not update_data:
+        return {"message": "Nada para atualizar", "template": template}
+
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db.templates.update_one(
+        {"id": template_id},
+        {"$set": update_data},
+    )
+
+    updated = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    return {"message": "Template atualizado com sucesso", "template": updated}
+
+
+@api_router.delete("/templates/{template_id}")
+async def delete_template(
+    template_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    result = await db.templates.delete_one({"id": template_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    return {"message": "Template removido com sucesso"}
+
+
+@api_router.post("/templates/{template_id}/use")
+async def use_template(
+    template_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    template = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    await db.templates.update_one(
+        {"id": template_id},
+        {
+            "$inc": {"usage_count": 1},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+        },
+    )
+
+    updated = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    return {
+        "message": "Template utilizado com sucesso",
+        "template": updated,
+        "content": updated.get("content"),
+    }
+
+
+@api_router.post("/templates/from-appointment/{apt_id}")
+async def create_template_from_appointment(
+    apt_id: str,
+    template_name: str = Query(...),
+    current_user: User = Depends(get_current_user),
+):
+    appointment = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    existing = await db.templates.find_one({"name": template_name}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Já existe um template com esse nome")
+
+    content_lines = [
+        f"Cliente: {appointment.get('first_name', '')} {appointment.get('last_name', '')}".strip(),
+        f"Protocolo: {appointment.get('protocol_number', '')}",
+        f"Data: {appointment.get('date', '')}",
+        f"Horário: {appointment.get('time_slot', '')}",
+        f"Status: {appointment.get('status', '')}",
+        f"Sistema: {appointment.get('emission_system', '') or 'N/A'}",
+        f"Observações: {appointment.get('notes', '') or ''}",
+    ]
+    content = "\n".join(content_lines)
+
+    template = {
+        "id": str(uuid.uuid4()),
+        "name": template_name,
+        "content": content,
+        "category": "appointment",
+        "is_active": True,
+        "usage_count": 0,
+        "source_appointment_id": apt_id,
+        "created_by": current_user.id,
+        "created_by_name": current_user.name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    await db.templates.insert_one(template)
+
+    return {
+        "message": "Template criado a partir do agendamento com sucesso",
+        "template": template,
+    }
+    
 app.include_router(api_router)
 
 
