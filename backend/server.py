@@ -4,6 +4,7 @@ import shutil
 import logging
 import jwt
 
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from typing import List
 from pathlib import Path
@@ -726,15 +727,7 @@ async def go_offline(current_user: User = Depends(get_current_user)):
     await db.users.update_one({"id": current_user.id}, {"$set": {"is_online": False, "last_seen": now}})
     return {"status": "offline", "timestamp": now}
 
-from datetime import datetime
-from typing import List
 
-
-
-
-
-
-from zoneinfo import ZoneInfo
 
 BR_TZ = ZoneInfo("America/Sao_Paulo")
 EXTRA_TIME_SLOTS = ["07:40", "12:40", "18:00", "18:20", "18:40"]
