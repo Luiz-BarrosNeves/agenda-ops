@@ -1722,8 +1722,8 @@ async def get_weekly_hours(
     return result
 
 
-@api_router.get("/reports/daily/csv")
-async def export_daily_csv(
+@api_router.get("/reports/daily")
+async def get_daily_report(
     date: str,
     current_user: User = Depends(get_current_user),
 ):
@@ -1735,34 +1735,20 @@ async def export_daily_csv(
         {"_id": 0}
     ).to_list(1000)
 
-    output = StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow([
-        "ID",
-        "Nome",
-        "Sobrenome",
-        "Data",
-        "Horário",
-        "Status",
-        "Agente",
-    ])
+    total = len(appointments)
+    by_status: Dict[str, int] = {}
 
     for apt in appointments:
-        writer.writerow([
-            apt.get("id"),
-            apt.get("first_name"),
-            apt.get("last_name"),
-            apt.get("date"),
-            apt.get("time_slot"),
-            apt.get("status"),
-            apt.get("user_id"),
-        ])
+        status = apt.get("status", "unknown")
+        by_status[status] = by_status.get(status, 0) + 1
 
-    response = Response(content=output.getvalue(), media_type="text/csv")
-    response.headers["Content-Disposition"] = f'attachment; filename="report_{date}.csv"'
-
-    return response
+    return {
+        "date": date,
+        "total": total,
+        "total_appointments": total,
+        "by_status": by_status,
+        "appointments": appointments,
+    }
 
 
 @api_router.get("/reports/weekly-hours")
