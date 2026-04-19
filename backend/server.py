@@ -1410,6 +1410,241 @@ async def check_redistribution(apt_id: str, current_user: User = Depends(get_cur
         ],
         "required_system": system,
     }
+
+class ChangeRequestCreate(BaseModel):
+    appointment_id: str
+    requested_date: Optional[str] = None
+    requested_time_slot: Optional[str] = None
+    reason: str
+
+
+class BlockedSlotCreate(BaseModel):
+    user_id: str
+    date: str
+    time_slot: str
+    reason: Optional[str] = None
+
+
+@api_router.post("/change-requests")
+async def create_change_request(
+    data: ChangeRequestCreate,
+    current_user: User = Depends(get_current_user),
+):
+    appointment = await db.appointments.find_one({"id": data.appointment_id}, {"_id": 0})
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    if current_user.role != UserRole.AGENTE and current_user.id != appointment.get("user_id"):
+        raise HTTPException(status_code=403, detail="Apenas o agente responsável pode solicitar alteração")
+
+    change_request = {
+        "id": str(uuid.uuid4()),
+        "appointment_id": data.appointment_id,
+        "requested_by": current_user.id,
+        "requested_by_name": current_user.name,
+        "current_date": appointment.get("date"),
+        "current_time_slot": appointment.get("time_slot"),
+        "requested_date": data.requested_date,
+        "requested_time_slot": data.requested_time_slot,
+        "reason": data.reason,
+        "status": "pending",
+        "review_notes": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    await db.change_requests.insert_one(change_request)
+
+    supervisors = await db.users.find(
+        {"role": UserRole.SUPERVISOR, "approved": True},
+        {"_id": 0}
+    ).to_list(100)
+
+    for supervisor in supervisors:
+        await db.notifications.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": supervisor["id"],
+                "message": f"Nova solicitação de alteração de agendamento por {current_user.name}",
+                "type": "change_request_pending",
+                "read": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    return {
+        "message": "Solicitação de alteração criada com sucesso",
+        "change_request": change_request,
+    }
+
+
+@api_router.get("/change-requests")
+async def get_change_requests(
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+
+    if current_user.role == UserRole.SUPERVISOR:
+        if status:
+            query["status"] = status
+    else:
+        query["requested_by"] = current_user.id
+        if status:
+            query["status"] = status
+
+    items = await db.change_requests.find(query, {"_id": 0}) \
+        .sort("created_at", -1).to_list(500)
+
+    return items
+
+
+@api_router.put("/change-requests/{request_id}/review")
+async def review_change_request(
+    request_id: str,
+    approved: bool = Query(...),
+    review_notes: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem revisar solicitações")
+
+    req = await db.change_requests.find_one({"id": request_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Change request not found")
+
+    if req.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Solicitação já foi revisada")
+
+    new_status = "approved" if approved else "rejected"
+
+    await db.change_requests.update_one(
+        {"id": request_id},
+        {
+            "$set": {
+                "status": new_status,
+                "review_notes": review_notes,
+                "reviewed_by": current_user.id,
+                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+    if approved:
+        update_data: Dict[str, Any] = {
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        if req.get("requested_date"):
+            update_data["date"] = req["requested_date"]
+        if req.get("requested_time_slot"):
+            update_data["time_slot"] = req["requested_time_slot"]
+
+        await db.appointments.update_one(
+            {"id": req["appointment_id"]},
+            {"$set": update_data},
+        )
+
+        appointment = await db.appointments.find_one({"id": req["appointment_id"]}, {"_id": 0})
+        if appointment:
+            await log_appointment_history(
+                req["appointment_id"],
+                "change_request_approved",
+                current_user.id,
+                current_user.name,
+                "date/time_slot",
+                f'{req.get("current_date")} {req.get("current_time_slot")}',
+                f'{appointment.get("date")} {appointment.get("time_slot")}',
+            )
+
+    await db.notifications.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": req["requested_by"],
+            "message": f"Sua solicitação de alteração foi {'aprovada' if approved else 'rejeitada'}",
+            "type": "change_request_reviewed",
+            "read": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    updated = await db.change_requests.find_one({"id": request_id}, {"_id": 0})
+    return {
+        "message": f"Solicitação {new_status} com sucesso",
+        "change_request": updated,
+    }
+
+
+@api_router.post("/blocked-slots")
+async def create_blocked_slot(
+    data: BlockedSlotCreate,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem bloquear horários")
+
+    user = await db.users.find_one({"id": data.user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    existing = await db.blocked_slots.find_one(
+        {
+            "user_id": data.user_id,
+            "date": data.date,
+            "time_slot": data.time_slot,
+        },
+        {"_id": 0},
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Horário já bloqueado para este usuário")
+
+    blocked_slot = {
+        "id": str(uuid.uuid4()),
+        "user_id": data.user_id,
+        "date": data.date,
+        "time_slot": data.time_slot,
+        "reason": data.reason,
+        "created_by": current_user.id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    await db.blocked_slots.insert_one(blocked_slot)
+
+    return {
+        "message": "Horário bloqueado com sucesso",
+        "blocked_slot": blocked_slot,
+    }
+
+
+@api_router.get("/blocked-slots")
+async def get_blocked_slots(
+    user_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+    if user_id:
+        query["user_id"] = user_id
+
+    items = await db.blocked_slots.find(query, {"_id": 0}) \
+        .sort([("date", 1), ("time_slot", 1)]).to_list(1000)
+
+    return items
+
+
+@api_router.delete("/blocked-slots/{blocked_slot_id}")
+async def delete_blocked_slot(
+    blocked_slot_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem remover bloqueios")
+
+    result = await db.blocked_slots.delete_one({"id": blocked_slot_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Blocked slot not found")
+
+    return {"message": "Bloqueio removido com sucesso"}
+    
     
 app.include_router(api_router)
 
