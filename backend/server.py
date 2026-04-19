@@ -4,6 +4,7 @@ import shutil
 import logging
 import jwt
 
+from zoneinfo import ZoneInfo
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from typing import List
