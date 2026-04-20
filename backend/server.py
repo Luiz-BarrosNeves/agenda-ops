@@ -459,8 +459,9 @@ async def get_available_slots(
     current_user: User = Depends(get_current_user),
 ):
     now = datetime.now()
-    today = now.date().isoformat()
-    current_time = now.strftime("%H:%M")
+    today_date = now.date()
+    request_date = datetime.fromisoformat(date).date()
+    current_time = now.strftime("%H:%M")    
 
     if emission_system and emission_system not in ["safeweb", "serpro"]:
         raise HTTPException(status_code=400, detail="Sistema de emissão inválido")
@@ -493,10 +494,13 @@ async def get_available_slots(
     available_slots = []
 
     for slot in time_slots:
-        if date == today and slot < current_time:
-            continue
-        if date < today:
-            continue
+        # BLOQUEIA DIAS PASSADOS
+        if request_date < today_date:
+        continue
+
+        # BLOQUEIA HORÁRIOS PASSADOS DO DIA ATUAL
+        if request_date == today_date and slot < current_time:
+        continue
 
         occupied = await db.appointments.count_documents({
             "date": date,
@@ -2007,7 +2011,65 @@ async def create_template_from_appointment(
         "message": "Template criado a partir do agendamento com sucesso",
         "template": template,
     }
-    
+
+@api_router.get("/my-appointments")
+async def get_my_appointments(
+    date: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+
+    # REGRA DE VISÃO
+    if current_user.role == UserRole.AGENTE:
+        query["user_id"] = current_user.id
+
+    elif current_user.role in [UserRole.TELEVENDAS, UserRole.COMERCIAL]:
+        query["created_by"] = current_user.id
+
+    else:
+        query["$or"] = [
+            {"created_by": current_user.id},
+            {"user_id": current_user.id},
+        ]
+
+    if date:
+        query["date"] = date
+
+    items = await db.appointments.find(query, {"_id": 0}) \
+        .sort([("date", 1), ("time_slot", 1)]) \
+        .to_list(1000)
+
+    return items
+@api_router.get("/my-appointments/stats")
+async def get_my_appointments_stats(
+    current_user: User = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+
+    if current_user.role == UserRole.AGENTE:
+        query["user_id"] = current_user.id
+
+    elif current_user.role in [UserRole.TELEVENDAS, UserRole.COMERCIAL]:
+        query["created_by"] = current_user.id
+
+    else:
+        query["$or"] = [
+            {"created_by": current_user.id},
+            {"user_id": current_user.id},
+        ]
+
+    all_appointments = await db.appointments.find(query, {"_id": 0}).to_list(1000)
+
+    today = datetime.now().date().isoformat()
+
+    return {
+        "total": len(all_appointments),
+        "today": len([a for a in all_appointments if a.get("date") == today]),
+        "pending": len([a for a in all_appointments if a.get("status") == "pendente_atribuicao"]),
+        "emitidos": len([a for a in all_appointments if a.get("status") == "emitido"]),
+        "pending_requests": 0
+    }
+
 app.include_router(api_router)
 
 
