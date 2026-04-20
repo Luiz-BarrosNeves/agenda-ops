@@ -496,11 +496,11 @@ async def get_available_slots(
     for slot in time_slots:
         # BLOQUEIA DIAS PASSADOS
         if request_date < today_date:
-        continue
+            continue
 
         # BLOQUEIA HORÁRIOS PASSADOS DO DIA ATUAL
         if request_date == today_date and slot < current_time:
-        continue
+            continue
 
         occupied = await db.appointments.count_documents({
             "date": date,
