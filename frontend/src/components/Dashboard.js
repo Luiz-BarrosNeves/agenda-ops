@@ -28,6 +28,7 @@ import { MetricCardSkeleton } from './ui/loading-states';
 import { FadeIn, AnimatedCard } from './ui/animations';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { format, parseISO } from 'date-fns';
 
 // Variantes de animação para views
 const viewVariants = {
@@ -448,8 +449,8 @@ export const Dashboard = () => {
               {hasActiveFilters && (
                 <p className="text-sm text-muted-foreground mt-1 hidden sm:block">
                   {filteredAppointments.length} resultado(s) • 
-                  {activeFilters.date_from && ` De ${format(new Date(activeFilters.date_from + 'T12:00:00'), 'dd/MM/yyyy')}`}
-                  {activeFilters.date_to && ` até ${format(new Date(activeFilters.date_to + 'T12:00:00'), 'dd/MM/yyyy')}`}
+                  {activeFilters.date_from && ` De ${format(parseISO(activeFilters.date_from), 'dd/MM/yyyy')}`}
+                  {activeFilters.date_to && ` até ${format(parseISO(activeFilters.date_to), 'dd/MM/yyyy')}`}
                   {activeFilters.status && ` • Status: ${activeFilters.status}`}
                   <Button
                     variant="link"
