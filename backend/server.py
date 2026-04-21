@@ -867,44 +867,6 @@ async def get_agents_presence(current_user: User = Depends(get_current_user)):
     return result
 
 
-@api_router.get("/my-appointments")
-async def get_my_appointments(date: Optional[str] = None, current_user: User = Depends(get_current_user)):
-    query = {"user_id": current_user.id}
-    if date:
-        query["date"] = date
-
-    appointments = await db.appointments.find(
-        query,
-        {"_id": 0}
-    ).sort([("date", 1), ("time_slot", 1)]).to_list(500)
-
-    return appointments
-
-
-@api_router.get("/my-appointments/stats")
-async def get_my_appointments_stats(current_user: User = Depends(get_current_user)):
-    total = await db.appointments.count_documents({"user_id": current_user.id})
-    emitidos = await db.appointments.count_documents({
-        "user_id": current_user.id,
-        "status": "emitido"
-    })
-    confirmados = await db.appointments.count_documents({
-        "user_id": current_user.id,
-        "status": "confirmado"
-    })
-    pendentes = await db.appointments.count_documents({
-        "user_id": current_user.id,
-        "status": "pendente_atribuicao"
-    })
-
-    return {
-        "total": total,
-        "emitidos": emitidos,
-        "confirmados": confirmados,
-        "pendentes": pendentes,
-    }
-
-
 EXTRA_TIME_SLOTS = ["07:40", "12:40", "18:00", "18:20", "18:40"]
 
 @api_router.get("/extra-hours")
