@@ -866,9 +866,6 @@ async def get_agents_presence(current_user: User = Depends(get_current_user)):
 
     return result
 
-
-EXTRA_TIME_SLOTS = ["07:40", "12:40", "18:00", "18:20", "18:40"]
-
 @api_router.get("/extra-hours")
 async def get_extra_hours(date: str, current_user: User = Depends(get_current_user)):
     doc = await db.extra_hours.find_one({"date": date}, {"_id": 0})
