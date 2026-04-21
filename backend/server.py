@@ -563,9 +563,9 @@ async def get_available_slots(
     emission_system: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
-    now = datetime.now()
+    now = now_br()
     today_date = now.date()
-    request_date = datetime.fromisoformat(date).date()
+    target_date = date or today_br_iso()
     current_time = now.strftime("%H:%M")    
 
     if emission_system and emission_system not in ["safeweb", "serpro"]:
@@ -1058,7 +1058,14 @@ async def go_offline(current_user: User = Depends(get_current_user)):
 
 BR_TZ = ZoneInfo("America/Sao_Paulo")
 EXTRA_TIME_SLOTS = ["07:40", "12:40", "18:00", "18:20", "18:40"]
+def now_br() -> datetime:
+    return datetime.now(BR_TZ)
 
+def today_br_iso() -> str:
+    return now_br().date().isoformat()
+
+def now_br_time_str() -> str:
+    return now_br().strftime("%H:%M")
 
 @api_router.get("/stats/dashboard")
 async def get_dashboard_stats(date: Optional[str] = None, current_user: User = Depends(get_current_user)):
@@ -1206,7 +1213,7 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
     except ValueError:
         raise HTTPException(status_code=400, detail="Data inválida. Use o formato YYYY-MM-DD")
 
-    now = datetime.now(BR_TZ)
+    now = now_br()
     today = now.date()
     current_time = now.strftime("%H:%M")
 
@@ -2033,7 +2040,7 @@ async def get_my_appointments_stats(
 
     all_appointments = await db.appointments.find(query, {"_id": 0}).to_list(1000)
 
-    today = datetime.now().date().isoformat()
+    today = today_br_iso()
 
     return {
         "total": len(all_appointments),
