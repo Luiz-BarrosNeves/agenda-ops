@@ -1732,9 +1732,40 @@ async def get_user_by_id(user_id: str, current_user: User = Depends(get_current_
 
 class ChangeRequestCreate(BaseModel):
     appointment_id: str
-    requested_date: Optional[str] = None
-    requested_time_slot: Optional[str] = None
-    reason: str
+    request_type: str  # 'edit' ou 'cancel'
+    reason: Optional[str] = None
+
+    # Campos opcionais para edição
+    new_first_name: Optional[str] = None
+    new_last_name: Optional[str] = None
+    new_protocol_number: Optional[str] = None
+    new_additional_protocols: Optional[List[str]] = None
+    new_date: Optional[str] = None
+    new_time_slot: Optional[str] = None
+    new_notes: Optional[str] = None
+
+class ChangeRequestResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    appointment_id: str
+    request_type: str
+    status: str
+    reason: Optional[str] = None
+
+    new_first_name: Optional[str] = None
+    new_last_name: Optional[str] = None
+    new_protocol_number: Optional[str] = None
+    new_additional_protocols: Optional[List[str]] = None
+    new_date: Optional[str] = None
+    new_time_slot: Optional[str] = None
+    new_notes: Optional[str] = None
+
+    requested_by: str
+    requested_by_name: str
+    created_at: str
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    review_notes: Optional[str] = None
 
 
 class BlockedSlotCreate(BaseModel):
@@ -1753,48 +1784,73 @@ async def create_change_request(
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    if current_user.role != UserRole.AGENTE and current_user.id != appointment.get("user_id"):
-        raise HTTPException(status_code=403, detail="Apenas o agente responsável pode solicitar alteração")
+    if data.request_type not in ["edit", "cancel"]:
+        raise HTTPException(status_code=400, detail="Tipo de solicitação inválido")
+
+    # Permissões:
+    # - Supervisor pode tudo
+    # - Agente responsável pode solicitar
+    # - Criador do agendamento pode solicitar
+    can_request = (
+        current_user.role == UserRole.SUPERVISOR
+        or current_user.id == appointment.get("user_id")
+        or current_user.id == appointment.get("created_by")
+    )
+
+    if not can_request:
+        raise HTTPException(
+            status_code=403,
+            detail="Apenas supervisor, agente responsável ou criador podem solicitar alteração/cancelamento"
+        )
+
+    now_str = datetime.now(timezone.utc).isoformat()
 
     change_request = {
         "id": str(uuid.uuid4()),
         "appointment_id": data.appointment_id,
+        "request_type": data.request_type,
+        "status": "pending",
+        "reason": data.reason,
+
+        "new_first_name": data.new_first_name,
+        "new_last_name": data.new_last_name,
+        "new_protocol_number": data.new_protocol_number,
+        "new_additional_protocols": data.new_additional_protocols,
+        "new_date": data.new_date,
+        "new_time_slot": data.new_time_slot,
+        "new_notes": data.new_notes,
+
         "requested_by": current_user.id,
         "requested_by_name": current_user.name,
-        "current_date": appointment.get("date"),
-        "current_time_slot": appointment.get("time_slot"),
-        "requested_date": data.requested_date,
-        "requested_time_slot": data.requested_time_slot,
-        "reason": data.reason,
-        "status": "pending",
+        "created_at": now_str,
         "review_notes": None,
         "reviewed_by": None,
         "reviewed_at": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     await db.change_requests.insert_one(change_request)
 
     supervisors = await db.users.find(
         {"role": UserRole.SUPERVISOR, "approved": True},
-        {"_id": 0}
+        {"_id": 0, "id": 1}
     ).to_list(100)
 
+    action_label = "cancelamento" if data.request_type == "cancel" else "alteração"
+
     for supervisor in supervisors:
-        await db.notifications.insert_one(
-            {
-                "id": str(uuid.uuid4()),
-                "user_id": supervisor["id"],
-                "message": f"Nova solicitação de alteração de agendamento por {current_user.name}",
-                "type": "change_request_pending",
-                "read": False,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": supervisor["id"],
+            "type": "change_request_pending",
+            "message": f"{current_user.name} solicitou {action_label} do agendamento de {appointment.get('first_name', '')} {appointment.get('last_name', '')}".strip(),
+            "read": False,
+            "created_at": now_str,
+        })
 
     return {
-        "message": "Solicitação de alteração criada com sucesso",
-        "change_request": change_request,
+        "message": "Solicitação criada e aguardando aprovação do supervisor",
+        "status": "pending",
+        "request": change_request,
     }
 
 
@@ -1829,69 +1885,107 @@ async def review_change_request(
     if current_user.role != UserRole.SUPERVISOR:
         raise HTTPException(status_code=403, detail="Apenas supervisores podem revisar solicitações")
 
-    req = await db.change_requests.find_one({"id": request_id}, {"_id": 0})
-    if not req:
-        raise HTTPException(status_code=404, detail="Change request not found")
+    request_doc = await db.change_requests.find_one({"id": request_id}, {"_id": 0})
+    if not request_doc:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada")
 
-    if req.get("status") != "pending":
-        raise HTTPException(status_code=400, detail="Solicitação já foi revisada")
+    if request_doc.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Esta solicitação já foi processada")
 
+    appointment = await db.appointments.find_one({"id": request_doc["appointment_id"]}, {"_id": 0})
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    now_str = datetime.now(timezone.utc).isoformat()
     new_status = "approved" if approved else "rejected"
 
     await db.change_requests.update_one(
         {"id": request_id},
-        {
-            "$set": {
-                "status": new_status,
-                "review_notes": review_notes,
-                "reviewed_by": current_user.id,
-                "reviewed_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
+        {"$set": {
+            "status": new_status,
+            "reviewed_by": current_user.id,
+            "reviewed_at": now_str,
+            "review_notes": review_notes,
+        }}
     )
 
     if approved:
-        update_data: Dict[str, Any] = {
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        if req.get("requested_date"):
-            update_data["date"] = req["requested_date"]
-        if req.get("requested_time_slot"):
-            update_data["time_slot"] = req["requested_time_slot"]
+        if request_doc.get("request_type") == "cancel":
+            await db.appointments.update_one(
+                {"id": request_doc["appointment_id"]},
+                {"$set": {
+                    "status": "cancelado",
+                    "updated_at": now_str
+                }}
+            )
 
-        await db.appointments.update_one(
-            {"id": req["appointment_id"]},
-            {"$set": update_data},
-        )
-
-        appointment = await db.appointments.find_one({"id": req["appointment_id"]}, {"_id": 0})
-        if appointment:
             await log_appointment_history(
-                req["appointment_id"],
+                request_doc["appointment_id"],
                 "change_request_approved",
                 current_user.id,
                 current_user.name,
-                "date/time_slot",
-                f'{req.get("current_date")} {req.get("current_time_slot")}',
-                f'{appointment.get("date")} {appointment.get("time_slot")}',
+                field_changed="status",
+                old_value=str(appointment.get("status")) if appointment.get("status") is not None else None,
+                new_value="cancelado",
             )
 
-    await db.notifications.insert_one(
-        {
-            "id": str(uuid.uuid4()),
-            "user_id": req["requested_by"],
-            "message": f"Sua solicitação de alteração foi {'aprovada' if approved else 'rejeitada'}",
-            "type": "change_request_reviewed",
-            "read": False,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
+        elif request_doc.get("request_type") == "edit":
+            updates = {"updated_at": now_str}
 
-    updated = await db.change_requests.find_one({"id": request_id}, {"_id": 0})
-    return {
-        "message": f"Solicitação {new_status} com sucesso",
-        "change_request": updated,
-    }
+            if request_doc.get("new_first_name") is not None:
+                updates["first_name"] = request_doc["new_first_name"]
+            if request_doc.get("new_last_name") is not None:
+                updates["last_name"] = request_doc["new_last_name"]
+            if request_doc.get("new_protocol_number") is not None:
+                updates["protocol_number"] = request_doc["new_protocol_number"]
+            if request_doc.get("new_additional_protocols") is not None:
+                updates["additional_protocols"] = request_doc["new_additional_protocols"]
+            if request_doc.get("new_date") is not None:
+                updates["date"] = request_doc["new_date"]
+            if request_doc.get("new_time_slot") is not None:
+                updates["time_slot"] = request_doc["new_time_slot"]
+            if request_doc.get("new_notes") is not None:
+                updates["notes"] = request_doc["new_notes"]
+
+            await db.appointments.update_one(
+                {"id": request_doc["appointment_id"]},
+                {"$set": updates}
+            )
+
+            updated_appointment = await db.appointments.find_one(
+                {"id": request_doc["appointment_id"]},
+                {"_id": 0}
+            )
+
+            for field in ["first_name", "last_name", "protocol_number", "additional_protocols", "date", "time_slot", "notes"]:
+                old_value = appointment.get(field)
+                new_value = updated_appointment.get(field)
+                if old_value != new_value:
+                    action = "updated"
+                    if field in ["date", "time_slot"]:
+                        action = "rescheduled"
+
+                    await log_appointment_history(
+                        request_doc["appointment_id"],
+                        action,
+                        current_user.id,
+                        current_user.name,
+                        field_changed=field,
+                        old_value=str(old_value) if old_value is not None else None,
+                        new_value=str(new_value) if new_value is not None else None,
+                    )
+
+    await db.notifications.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": request_doc["requested_by"],
+        "message": f"Sua solicitação de {'cancelamento' if request_doc.get('request_type') == 'cancel' else 'alteração'} foi {'aprovada' if approved else 'rejeitada'}",
+        "type": "change_request_reviewed",
+        "read": False,
+        "created_at": now_str,
+    })
+
+    updated_request = await db.change_requests.find_one({"id": request_id}, {"_id": 0})
+    return updated_request
 
 
 @api_router.post("/blocked-slots")
