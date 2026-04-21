@@ -351,6 +351,9 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
         "criar agendamentos",
     )
 
+    total_protocols = 1 + len(apt_data.additional_protocols)
+    occupies_two_slots = total_protocols >= 3
+
     emission_system = apt_data.emission_system
     if emission_system and emission_system not in ["safeweb", "serpro"]:
         raise HTTPException(status_code=400, detail="Sistema de emissão inválido")
@@ -371,6 +374,7 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
         "document_urls": [],
         "date": apt_data.date,
         "time_slot": apt_data.time_slot,
+        "occupies_two_slots": occupies_two_slots,
         "appointment_type": "videoconferencia",
         "status": "pendente_atribuicao",
         "notes": apt_data.notes,
@@ -611,6 +615,7 @@ async def get_available_slots(
     extra_slots = extra_hours_doc.get("slots", []) if extra_hours_doc else []
 
     time_slots = sorted(set(normal_time_slots + extra_slots))
+    slot_index_map = {slot: idx for idx, slot in enumerate(time_slots)}
 
     agent_query = {"role": UserRole.AGENTE, "approved": True}
     if emission_system:
@@ -618,6 +623,11 @@ async def get_available_slots(
 
     agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
     total_agents = len(agents)
+
+    appointments = await db.appointments.find(
+        {"date": date, "status": {"$ne": "cancelado"}},
+        {"_id": 0},
+    ).to_list(1000)
 
     available_slots = []
 
@@ -629,17 +639,34 @@ async def get_available_slots(
         if request_date == today_date and slot < current_time:
             continue
 
-        occupied = await db.appointments.count_documents({
-            "date": date,
-            "time_slot": slot,
-            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
-        })
+    slot_appointments = []
 
-        reserved = await db.appointments.count_documents({
-            "date": date,
-            "time_slot": slot,
-            "status": "pendente_atribuicao",
-        })
+    for apt in appointments:
+        apt_slot = apt.get("time_slot")
+        if not apt_slot or apt_slot not in slot_index_map:
+            continue
+
+        occupies_two = apt.get("occupies_two_slots", False)
+        apt_index = slot_index_map[apt_slot]
+        current_index = slot_index_map[slot]
+
+        affects_current_slot = apt_index == current_index
+
+        if occupies_two and apt_index + 1 == current_index:
+            affects_current_slot = True
+
+        if affects_current_slot:
+            slot_appointments.append(apt)
+
+    occupied = len([
+        a for a in slot_appointments
+        if a.get("status") != "pendente_atribuicao"
+    ])
+
+    reserved = len([
+        a for a in slot_appointments
+        if a.get("status") == "pendente_atribuicao"
+    ])
 
         available = total_agents - occupied
 
@@ -945,6 +972,13 @@ async def update_appointment(apt_id: str, apt_data: AppointmentUpdate, current_u
         raise HTTPException(status_code=403, detail="Apenas supervisor, criador ou agente designado podem editar")
 
     update_data = {k: v for k, v in apt_data.model_dump().items() if v is not None}
+    
+    current_additional_protocols = apt.get("additional_protocols", [])
+    new_additional_protocols = update_data.get("additional_protocols", current_additional_protocols)
+
+    total_protocols = 1 + len(new_additional_protocols)
+    update_data["occupies_two_slots"] = total_protocols >= 3
+    
     if not update_data:
         return Appointment(**apt)
 
