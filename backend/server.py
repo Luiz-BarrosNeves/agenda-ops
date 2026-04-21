@@ -1484,8 +1484,6 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
     today = now.date()
     current_time = now.strftime("%H:%M")
 
-
-    # Não mostrar dias passados
     if request_date < today:
         return {
             "date": date,
@@ -1493,7 +1491,6 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
             "slots": [],
         }
 
-    # Não mostrar sábado (5) e domingo (6)
     if request_date.weekday() >= 5:
         return {
             "date": date,
@@ -1513,6 +1510,11 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
     ).to_list(100)
     total_agents = len(agents)
 
+    agent_names_map = {
+        agent["id"]: agent["name"]
+        for agent in agents
+    }
+
     appointments = await db.appointments.find(
         {"date": date},
         {"_id": 0},
@@ -1520,7 +1522,6 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
 
     result = []
     for slot in all_slots:
-        # Não mostrar horários que já passaram no dia atual
         if request_date == today and slot <= current_time:
             continue
 
@@ -1544,7 +1545,11 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
                 affects_current_slot = True
 
             if affects_current_slot:
-                slot_appointments.append(a)
+                enriched_appointment = {
+                    **a,
+                    "agent_name": agent_names_map.get(a.get("user_id"))
+                }
+                slot_appointments.append(enriched_appointment)
 
         occupied = len([
             a for a in slot_appointments
