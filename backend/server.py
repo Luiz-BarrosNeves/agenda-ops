@@ -659,14 +659,13 @@ async def get_available_slots(
     except ValueError:
         raise HTTPException(status_code=400, detail="Data inválida. Use o formato YYYY-MM-DD")
 
-    now = datetime.now(BR_TZ)
+    now = now_br()
     today_date = now.date()
     current_time = now.strftime("%H:%M")
 
     if emission_system and emission_system not in ["safeweb", "serpro"]:
         raise HTTPException(status_code=400, detail="Sistema de emissão inválido")
 
-    # Não mostrar dias passados
     if request_date < today_date:
         return {
             "date": date,
@@ -675,7 +674,6 @@ async def get_available_slots(
             "available_slots": [],
         }
 
-    # Não mostrar sábado e domingo
     if request_date.weekday() >= 5:
         return {
             "date": date,
@@ -721,52 +719,50 @@ async def get_available_slots(
         is_past = request_date < today_date or (request_date == today_date and slot < current_time)
         is_current = request_date == today_date and slot == current_time
 
-        # Não mostrar horários passados do dia atual
         if request_date == today_date and slot < current_time:
             continue
 
-    slot_appointments = []
+        slot_appointments = []
 
-    for apt in appointments:
-        apt_slot = apt.get("time_slot")
-        if not apt_slot or apt_slot not in slot_index_map:
-            continue
+        for apt in appointments:
+            apt_slot = apt.get("time_slot")
+            if not apt_slot or apt_slot not in slot_index_map:
+                continue
 
-        occupies_two = apt.get("occupies_two_slots", False)
-        apt_index = slot_index_map[apt_slot]
-        current_index = slot_index_map[slot]
+            apt_occupies_two = apt.get("occupies_two_slots", False)
+            apt_index = slot_index_map[apt_slot]
+            current_index = slot_index_map[slot]
 
-        affects_current_slot = apt_index == current_index
+            affects_current_slot = apt_index == current_index
+            if apt_occupies_two and apt_index + 1 == current_index:
+                affects_current_slot = True
 
-        if occupies_two and apt_index + 1 == current_index:
-            affects_current_slot = True
+            if affects_current_slot:
+                slot_appointments.append(apt)
 
-        if affects_current_slot:
-            slot_appointments.append(apt)
+        occupied = len([
+            a for a in slot_appointments
+            if a.get("status") != "pendente_atribuicao"
+        ])
 
-    occupied = len([
-        a for a in slot_appointments
-        if a.get("status") != "pendente_atribuicao"
-    ])
+        reserved = len([
+            a for a in slot_appointments
+            if a.get("status") == "pendente_atribuicao"
+        ])
 
-    reserved = len([
-        a for a in slot_appointments
-        if a.get("status") == "pendente_atribuicao"
-    ])
+        available = max(0, total_agents - occupied)
 
-    available = total_agents - occupied
-
-    if available > 0:
-        available_slots.append({
-            "time_slot": slot,
-            "available_agents": available,
-            "total_agents": total_agents,
-            "reserved": reserved,
-            "status": "available",
-            "is_past": is_past,
-            "is_current": is_current,
-            "is_extra": slot in extra_slots,
-    })
+        if available > 0:
+            available_slots.append({
+                "time_slot": slot,
+                "available_agents": available,
+                "total_agents": total_agents,
+                "reserved": reserved,
+                "status": "available",
+                "is_past": is_past,
+                "is_current": is_current,
+                "is_extra": slot in extra_slots,
+            })
 
     return {
         "date": date,
@@ -774,7 +770,6 @@ async def get_available_slots(
         "total_agents_with_permission": total_agents,
         "available_slots": available_slots,
     }
-
 @api_router.get("/appointments/filtered")
 async def get_filtered_appointments(
     search: Optional[str] = None,
