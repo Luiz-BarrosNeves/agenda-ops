@@ -1160,8 +1160,7 @@ if occupies_two_slots:
             detail="Este agendamento precisa de 2 horários consecutivos, mas o próximo horário não está disponível"
         )
     
-    if not update_data:
-        return Appointment(**apt)
+
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.appointments.update_one({"id": apt_id}, {"$set": update_data})
@@ -1178,8 +1177,7 @@ if occupies_two_slots:
                 str(new_value),
             )
 
-    updated_apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
-    return Appointment(**updated_apt)
+
 
 
 @api_router.delete("/appointments/{apt_id}")
@@ -1455,6 +1453,7 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
     now = now_br()
     today = now.date()
     current_time = now.strftime("%H:%M")
+
 
     # Não mostrar dias passados
     if request_date < today:
@@ -2297,8 +2296,8 @@ async def get_my_appointments_stats(
 
     all_appointments = await db.appointments.find(query, {"_id": 0}).to_list(1000)
 
-    today = today_br_iso()
 
+    today = today_br_iso()
     return {
         "total": len(all_appointments),
         "today": len([a for a in all_appointments if a.get("date") == today]),
