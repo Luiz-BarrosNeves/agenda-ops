@@ -158,6 +158,7 @@ class Appointment(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
     user_id: Optional[str] = None
+    agent_name: Optional[str] = None
     first_name: str
     last_name: str
     protocol_number: str
@@ -1022,18 +1023,51 @@ async def get_appointments(
     current_user: User = Depends(get_current_user),
 ):
     query: Dict[str, Any] = {}
+
     if current_user.role == UserRole.AGENTE:
         query["user_id"] = current_user.id
+
     if date:
         query["date"] = date
+
     if status:
         query["status"] = status
+
     if user_id and current_user.role in [UserRole.ADMIN, UserRole.SUPERVISOR]:
         query["user_id"] = user_id
 
-    appointments = await db.appointments.find(query, {"_id": 0}).sort([("date", 1), ("time_slot", 1)]).to_list(1000)
-    return [Appointment(**apt) for apt in appointments]
+    appointments = await db.appointments.find(
+        query,
+        {"_id": 0}
+    ).sort([("date", 1), ("time_slot", 1)]).to_list(1000)
 
+    user_ids = list({
+        apt.get("user_id")
+        for apt in appointments
+        if apt.get("user_id")
+    })
+
+    agent_names_map = {}
+    if user_ids:
+        users = await db.users.find(
+            {"id": {"$in": user_ids}},
+            {"_id": 0, "id": 1, "name": 1}
+        ).to_list(200)
+
+        agent_names_map = {
+            user["id"]: user["name"]
+            for user in users
+        }
+
+    enriched_appointments = []
+    for apt in appointments:
+        enriched_apt = {
+            **apt,
+            "agent_name": agent_names_map.get(apt.get("user_id"))
+        }
+        enriched_appointments.append(Appointment(**enriched_apt))
+
+    return enriched_appointments
 
 @api_router.get("/appointments/{apt_id}", response_model=Appointment)
 async def get_appointment(apt_id: str, current_user: User = Depends(get_current_user)):
@@ -2251,13 +2285,10 @@ async def get_my_appointments(
 ):
     query: Dict[str, Any] = {}
 
-    # REGRA DE VISÃO
     if current_user.role == UserRole.AGENTE:
         query["user_id"] = current_user.id
-
     elif current_user.role in [UserRole.TELEVENDAS, UserRole.COMERCIAL]:
         query["created_by"] = current_user.id
-
     else:
         query["$or"] = [
             {"created_by": current_user.id},
@@ -2271,7 +2302,34 @@ async def get_my_appointments(
         .sort([("date", 1), ("time_slot", 1)]) \
         .to_list(1000)
 
-    return items
+    user_ids = list({
+        item.get("user_id")
+        for item in items
+        if item.get("user_id")
+    })
+
+    agent_names_map = {}
+    if user_ids:
+        users = await db.users.find(
+            {"id": {"$in": user_ids}},
+            {"_id": 0, "id": 1, "name": 1}
+        ).to_list(200)
+
+        agent_names_map = {
+            user["id"]: user["name"]
+            for user in users
+        }
+
+    enriched_items = []
+    for item in items:
+        enriched_item = {
+            **item,
+            "agent_name": agent_names_map.get(item.get("user_id"))
+        }
+        enriched_items.append(enriched_item)
+
+    return enriched_items
+    
 @api_router.get("/my-appointments/stats")
 async def get_my_appointments_stats(
     current_user: User = Depends(get_current_user),
