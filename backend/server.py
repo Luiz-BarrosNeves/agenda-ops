@@ -977,18 +977,6 @@ class ChangePasswordRequest(BaseModel):
     confirm_password: str
 
 
-@api_router.get("/users/{user_id}", response_model=User)
-async def get_user_by_id(user_id: str, current_user: User = Depends(get_current_user)):
-    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
-        raise HTTPException(status_code=403, detail="Acesso não autorizado")
-
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return User(**user)
-
-
 @api_router.get("/users/stats/team")
 async def get_team_stats(current_user: User = Depends(get_current_user)):
     if current_user.role not in [UserRole.ADMIN, UserRole.SUPERVISOR]:
@@ -1116,6 +1104,18 @@ async def reset_user_password(
 
     return {"message": "Password reset successfully"}
 
+@api_router.get("/users/{user_id}", response_model=User)
+async def get_user_by_id(user_id: str, current_user: User = Depends(get_current_user)):
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return User(**user)
+    
+
 class AppointmentRecurringCreate(BaseModel):
     first_name: str
     last_name: str
@@ -1222,38 +1222,6 @@ async def get_appointments_paginated(
         "total": total,
         "pages": (total + page_size - 1) // page_size,
     }
-
-
-@api_router.get("/appointments/filtered")
-async def get_filtered_appointments(
-    date: Optional[str] = None,
-    status: Optional[str] = None,
-    user_id: Optional[str] = None,
-    first_name: Optional[str] = None,
-    last_name: Optional[str] = None,
-    protocol_number: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
-):
-    query: Dict[str, Any] = {}
-    if current_user.role == UserRole.AGENTE:
-        query["user_id"] = current_user.id
-    if date:
-        query["date"] = date
-    if status:
-        query["status"] = status
-    if user_id and current_user.role in [UserRole.ADMIN, UserRole.SUPERVISOR]:
-        query["user_id"] = user_id
-    if first_name:
-        query["first_name"] = {"$regex": first_name, "$options": "i"}
-    if last_name:
-        query["last_name"] = {"$regex": last_name, "$options": "i"}
-    if protocol_number:
-        query["protocol_number"] = {"$regex": protocol_number, "$options": "i"}
-
-    items = await db.appointments.find(query, {"_id": 0}) \
-        .sort([("date", 1), ("time_slot", 1)]).to_list(1000)
-
-    return items
 
 
 @api_router.get("/appointments/{apt_id}/history")
