@@ -64,18 +64,23 @@ const DraggableAppointment = ({ appointment, agents, onEdit, isDragging, onOpenH
     zIndex: 1000,
   } : undefined;
 
-  const getAgentName = (userId) => {
-    const agent = agents.find(a => a.id === userId);
+  const getAgentName = (appointment) => {
+    if (appointment?.agent_name) return appointment.agent_name;
+    const agent = agents.find(a => a.id === appointment?.user_id);
     return agent?.name || 'Não atribuído';
   };
 
-  const getAgentInitials = (userId) => {
-    const agent = agents.find(a => a.id === userId);
-    if (!agent?.name) return '?';
-    const names = agent.name.split(' ');
-    return names.length > 1 
-      ? `${names[0][0]}${names[names.length-1][0]}`.toUpperCase()
-      : names[0][0].toUpperCase();
+  const getAgentInitials = (appointment) => {
+    const agentName =
+      appointment?.agent_name ||
+      agents.find(a => a.id === appointment?.user_id)?.name;
+
+  if (!agentName) return '?';
+
+  const names = agentName.split(' ');
+  return names.length > 1
+    ? `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase()
+    : names[0][0].toUpperCase();
   };
 
   const canSeeActions = userRole === 'supervisor' || userRole === 'admin';
@@ -137,7 +142,7 @@ const DraggableAppointment = ({ appointment, agents, onEdit, isDragging, onOpenH
         {/* Avatar do agente */}
         <div className="flex-shrink-0">
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 flex items-center justify-center text-xs font-bold text-primary border-2 border-white dark:border-slate-700 shadow-sm">
-            {getAgentInitials(appointment.user_id)}
+            {getAgentInitials(appointment)}
           </div>
         </div>
         
@@ -160,7 +165,7 @@ const DraggableAppointment = ({ appointment, agents, onEdit, isDragging, onOpenH
               {statusLabels[appointment.status]}
             </span>
             <span className="text-[10px] text-muted-foreground truncate">
-              {getAgentName(appointment.user_id)}
+              {getAgentName(appointment)}
             </span>
           </div>
         </div>
@@ -522,7 +527,8 @@ export const AgendaCompleta = ({
     );
   }
 
-  const getAgentName = (userId) => {
+  const getAgentName = (userId, agentName = null) => {
+    if (agentName) return agentName;
     const agent = agents.find(a => a.id === userId);
     return agent?.name || 'Não atribuído';
   };
@@ -742,7 +748,9 @@ export const AgendaCompleta = ({
                                         <div className={`absolute top-3 right-3 w-2 h-2 rounded-full ${statusDotColors[apt.status]} ring-2 ring-white dark:ring-slate-800`} />
                                         <div className="flex items-start gap-3">
                                           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 flex items-center justify-center text-xs font-bold text-primary border-2 border-white dark:border-slate-700 shadow-sm">
-                                            {apt.user_id ? getAgentName(apt.user_id).split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() : '?'}
+                                            {apt.agent_name
+                                              ? apt.agent_name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase()
+                                              : (apt.user_id ? getAgentName(apt.user_id).split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() : '?')}
                                           </div>
                                           <div className="flex-1 min-w-0">
                                             <p className="text-sm font-semibold truncate">
@@ -1009,7 +1017,7 @@ export const AgendaCompleta = ({
                                       <p className="text-xs opacity-75 truncate">{apt.protocol_number}</p>
                                       <div className="flex items-center gap-1 mt-1 text-xs opacity-75">
                                         <User className="w-3 h-3" />
-                                        <span className="truncate">{getAgentName(apt.user_id)}</span>
+                                        <span className="truncate">{getAgentName(apt.user_id, apt.agent_name)}</span>
                                       </div>
                                     </div>
                                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/50 whitespace-nowrap">
