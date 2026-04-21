@@ -754,7 +754,7 @@ async def get_available_slots(
         if a.get("status") == "pendente_atribuicao"
     ])
 
-        available = total_agents - occupied
+    available = total_agents - occupied
 
         if available > 0:
             available_slots.append({
