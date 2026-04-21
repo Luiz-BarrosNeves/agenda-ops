@@ -1065,40 +1065,41 @@ async def update_appointment(apt_id: str, apt_data: AppointmentUpdate, current_u
     total_protocols = 1 + len(new_additional_protocols)
     update_data["occupies_two_slots"] = total_protocols >= 3
 
+
     new_date = update_data.get("date", apt.get("date"))
-new_time_slot = update_data.get("time_slot", apt.get("time_slot"))
-new_emission_system = update_data.get("emission_system", apt.get("emission_system"))
-occupies_two_slots = update_data["occupies_two_slots"]
+    new_time_slot = update_data.get("time_slot", apt.get("time_slot"))
+    new_emission_system = update_data.get("emission_system", apt.get("emission_system"))
+    occupies_two_slots = update_data["occupies_two_slots"]
 
-normal_time_slots = [
-    "08:00", "08:20", "08:40",
-    "09:00", "09:20", "09:40",
-    "10:00", "10:20", "10:40",
-    "11:00", "11:20", "11:40",
-    "12:00", "12:20",
-    "13:00", "13:20", "13:40",
-    "14:00", "14:20", "14:40",
-    "15:00", "15:20", "15:40",
-    "16:00", "16:20", "16:40",
-    "17:00", "17:20", "17:40",
-]
+    normal_time_slots = [
+        "08:00", "08:20", "08:40",
+        "09:00", "09:20", "09:40",
+        "10:00", "10:20", "10:40",
+        "11:00", "11:20", "11:40",
+        "12:00", "12:20",
+        "13:00", "13:20", "13:40",
+        "14:00", "14:20", "14:40",
+        "15:00", "15:20", "15:40",
+        "16:00", "16:20", "16:40",
+        "17:00", "17:20", "17:40",
+    ]
 
-extra_hours_doc = await db.extra_hours.find_one({"date": new_date}, {"_id": 0})
-extra_slots = extra_hours_doc.get("slots", []) if extra_hours_doc else []
+    extra_hours_doc = await db.extra_hours.find_one({"date": new_date}, {"_id": 0})
+    extra_slots = extra_hours_doc.get("slots", []) if extra_hours_doc else []
 
-time_slots = sorted(set(normal_time_slots + extra_slots))
+    time_slots = sorted(set(normal_time_slots + extra_slots))
 
-if new_time_slot not in time_slots:
-    raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
+    if new_time_slot not in time_slots:
+        raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
 
-if occupies_two_slots:
-    current_index = time_slots.index(new_time_slot)
+    if occupies_two_slots:
+        current_index = time_slots.index(new_time_slot)
 
-    if current_index + 1 >= len(time_slots):
-        raise HTTPException(
-            status_code=400,
-            detail="Este agendamento precisa de 2 horários consecutivos, mas não existe próximo horário disponível"
-        )
+        if current_index + 1 >= len(time_slots):
+            raise HTTPException(
+                status_code=400,
+                detail="Este agendamento precisa de 2 horários consecutivos, mas não existe próximo horário disponível"
+            )
 
     next_slot = time_slots[current_index + 1]
 
@@ -2312,3 +2313,4 @@ app.include_router(api_router)
 @app.on_event("shutdown")
 async def shutdown_event():
     client.close()
+    
