@@ -167,6 +167,7 @@ class Appointment(BaseModel):
     document_urls: List[str] = []
     date: str
     time_slot: str
+    occupies_two_slots: bool = False
     appointment_type: str
     status: str
     notes: Optional[str] = None
