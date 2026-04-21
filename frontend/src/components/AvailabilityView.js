@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { appointmentsAPI } from '../utils/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { CheckCircle, Clock, XCircle } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { AvailabilityGridSkeleton } from './ui/loading-states';
 
@@ -60,7 +60,7 @@ export const AvailabilityView = ({ date, secondary }) => {
     <Card className={secondary ? 'bg-muted/60 border border-border/40 shadow-none' : 'shadow-sm border-border'} data-testid="availability-view">
       <CardHeader className="pb-4">
         <CardTitle className={secondary ? 'text-base font-medium text-muted-foreground' : 'text-lg font-semibold text-foreground'}>
-          Horários Disponíveis - {format(new Date(date), "dd 'de' MMMM", { locale: ptBR })}
+          Horários Disponíveis - {format(parseISO(date), "dd 'de' MMMM", { locale: ptBR })}
         </CardTitle>
         {/* Barra de capacidade do dia */}
         {capacity.total > 0 && (
