@@ -1201,7 +1201,32 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
         "17:00", "17:20", "17:40",
     ]
 
-    extra_doc = await db.extra_hours.find_one({"date": date})
+    try:
+        request_date = datetime.fromisoformat(date).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data inválida. Use o formato YYYY-MM-DD")
+
+    now = datetime.now(BR_TZ)
+    today = now.date()
+    current_time = now.strftime("%H:%M")
+
+    # Não mostrar dias passados
+    if request_date < today:
+        return {
+            "date": date,
+            "total_agents": 0,
+            "slots": [],
+        }
+
+    # Não mostrar sábado (5) e domingo (6)
+    if request_date.weekday() >= 5:
+        return {
+            "date": date,
+            "total_agents": 0,
+            "slots": [],
+        }
+
+    extra_doc = await db.extra_hours.find_one({"date": date}, {"_id": 0})
     extra_slots = extra_doc.get("slots", []) if extra_doc else []
 
     all_slots = sorted(set(normal_slots + extra_slots))
@@ -1219,27 +1244,37 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
 
     result = []
     for slot in all_slots:
+        # Não mostrar horários que já passaram no dia atual
+        if request_date == today and slot <= current_time:
+            continue
+
         slot_appointments = [
             a for a in appointments
             if a.get("time_slot") == slot and a.get("status") != "cancelado"
         ]
+
         occupied = len([
             a for a in slot_appointments
             if a.get("status") != "pendente_atribuicao"
         ])
+
         pending = len([
             a for a in slot_appointments
             if a.get("status") == "pendente_atribuicao"
         ])
-        available = total_agents - occupied
+
+        available = max(0, total_agents - occupied)
 
         result.append({
             "time_slot": slot,
             "total_agents": total_agents,
             "occupied": occupied,
             "pending": pending,
-            "available": max(0, available),
+            "available": available,
             "appointments": slot_appointments,
+            "is_extra": slot in extra_slots,
+            "is_past": False,
+            "is_current": False,
         })
 
     return {
