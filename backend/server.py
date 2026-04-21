@@ -373,10 +373,10 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
     time_slots = sorted(set(normal_time_slots + extra_slots))
 
     if apt_data.time_slot not in time_slots:
-    raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
+        raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
 
     if occupies_two_slots:
-    current_index = time_slots.index(apt_data.time_slot)
+        current_index = time_slots.index(apt_data.time_slot)
 
     if current_index + 1 >= len(time_slots):
         raise HTTPException(
