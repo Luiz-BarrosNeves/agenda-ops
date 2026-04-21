@@ -1295,6 +1295,7 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
     extra_slots = extra_doc.get("slots", []) if extra_doc else []
 
     all_slots = sorted(set(normal_slots + extra_slots))
+    slot_index_map = {slot: idx for idx, slot in enumerate(all_slots)}
 
     agents = await db.users.find(
         {"role": UserRole.AGENTE, "approved": True},
@@ -1313,10 +1314,27 @@ async def get_all_slots(date: str, current_user: User = Depends(get_current_user
         if request_date == today and slot <= current_time:
             continue
 
-        slot_appointments = [
-            a for a in appointments
-            if a.get("time_slot") == slot and a.get("status") != "cancelado"
-        ]
+        slot_appointments = []
+
+        for a in appointments:
+            if a.get("status") == "cancelado":
+                continue
+
+            apt_slot = a.get("time_slot")
+            if not apt_slot or apt_slot not in slot_index_map:
+                continue
+
+            occupies_two = a.get("occupies_two_slots", False)
+            apt_index = slot_index_map[apt_slot]
+            current_index = slot_index_map[slot]
+
+            affects_current_slot = apt_index == current_index
+
+            if occupies_two and apt_index + 1 == current_index:
+                affects_current_slot = True
+
+            if affects_current_slot:
+                slot_appointments.append(a)
 
         occupied = len([
             a for a in slot_appointments
