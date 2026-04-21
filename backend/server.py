@@ -756,17 +756,17 @@ async def get_available_slots(
 
     available = total_agents - occupied
 
-        if available > 0:
-            available_slots.append({
-                "time_slot": slot,
-                "available_agents": available,
-                "total_agents": total_agents,
-                "reserved": reserved,
-                "status": "available",
-                "is_past": is_past,
-                "is_current": is_current,
-                "is_extra": slot in extra_slots,
-            })
+    if available > 0:
+        available_slots.append({
+            "time_slot": slot,
+            "available_agents": available,
+            "total_agents": total_agents,
+            "reserved": reserved,
+            "status": "available",
+            "is_past": is_past,
+            "is_current": is_current,
+            "is_extra": slot in extra_slots,
+    })
 
     return {
         "date": date,
