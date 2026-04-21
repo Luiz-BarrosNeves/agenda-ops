@@ -563,13 +563,35 @@ async def get_available_slots(
     emission_system: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
-    now = now_br()
+    try:
+        request_date = datetime.fromisoformat(date).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data inválida. Use o formato YYYY-MM-DD")
+
+    now = datetime.now(BR_TZ)
     today_date = now.date()
-    target_date = date or today_br_iso()
-    current_time = now.strftime("%H:%M")    
+    current_time = now.strftime("%H:%M")
 
     if emission_system and emission_system not in ["safeweb", "serpro"]:
         raise HTTPException(status_code=400, detail="Sistema de emissão inválido")
+
+    # Não mostrar dias passados
+    if request_date < today_date:
+        return {
+            "date": date,
+            "emission_system": emission_system,
+            "total_agents_with_permission": 0,
+            "available_slots": [],
+        }
+
+    # Não mostrar sábado e domingo
+    if request_date.weekday() >= 5:
+        return {
+            "date": date,
+            "emission_system": emission_system,
+            "total_agents_with_permission": 0,
+            "available_slots": [],
+        }
 
     normal_time_slots = [
         "08:00", "08:20", "08:40",
@@ -584,7 +606,7 @@ async def get_available_slots(
         "17:00", "17:20", "17:40",
     ]
 
-    extra_hours_doc = await db.extra_hours.find_one({"date": date})
+    extra_hours_doc = await db.extra_hours.find_one({"date": date}, {"_id": 0})
     extra_slots = extra_hours_doc.get("slots", []) if extra_hours_doc else []
 
     time_slots = sorted(set(normal_time_slots + extra_slots))
@@ -599,11 +621,10 @@ async def get_available_slots(
     available_slots = []
 
     for slot in time_slots:
-        # BLOQUEIA DIAS PASSADOS
-        if request_date < today_date:
-            continue
+        is_past = request_date < today_date or (request_date == today_date and slot < current_time)
+        is_current = request_date == today_date and slot == current_time
 
-        # BLOQUEIA HORÁRIOS PASSADOS DO DIA ATUAL
+        # Não mostrar horários passados do dia atual
         if request_date == today_date and slot < current_time:
             continue
 
@@ -628,6 +649,9 @@ async def get_available_slots(
                 "total_agents": total_agents,
                 "reserved": reserved,
                 "status": "available",
+                "is_past": is_past,
+                "is_current": is_current,
+                "is_extra": slot in extra_slots,
             })
 
     return {
@@ -636,7 +660,6 @@ async def get_available_slots(
         "total_agents_with_permission": total_agents,
         "available_slots": available_slots,
     }
-
 
 @api_router.get("/appointments/filtered")
 async def get_filtered_appointments(
