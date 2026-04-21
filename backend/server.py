@@ -340,58 +340,6 @@ async def get_users(pending_approval: Optional[bool] = None, current_user: User 
     return [User(**u) for u in users]
 
 
-@api_router.put("/users/{user_id}/approve")
-async def approve_user(user_id: str, current_user: User = Depends(get_current_user)):
-    if current_user.role != UserRole.SUPERVISOR:
-        raise HTTPException(status_code=403, detail="Only supervisors can approve users")
-
-    result = await db.users.update_one({"id": user_id}, {"$set": {"approved": True}})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "User approved successfully"}
-
-
-@api_router.put("/users/{user_id}/role")
-async def update_user_role(user_id: str, role_data: UserUpdateRole, current_user: User = Depends(get_current_user)):
-    if current_user.role != UserRole.SUPERVISOR:
-        raise HTTPException(status_code=403, detail="Only supervisors can change user roles")
-
-    result = await db.users.update_one({"id": user_id}, {"$set": {"role": role_data.role}})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "User role updated successfully"}
-
-
-@api_router.put("/users/{user_id}/permissions")
-async def update_user_permissions(user_id: str, perm_data: UserUpdatePermissions, current_user: User = Depends(get_current_user)):
-    if current_user.role != UserRole.SUPERVISOR:
-        raise HTTPException(status_code=403, detail="Apenas supervisores podem alterar permissões")
-
-    update_data: Dict[str, Any] = {}
-    if perm_data.can_safeweb is not None:
-        update_data["can_safeweb"] = perm_data.can_safeweb
-    if perm_data.can_serpro is not None:
-        update_data["can_serpro"] = perm_data.can_serpro
-    if not update_data:
-        raise HTTPException(status_code=400, detail="Nenhuma permissão para atualizar")
-
-    result = await db.users.update_one({"id": user_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Usuário não encontrado")
-    return {"message": "Permissões atualizadas com sucesso"}
-
-
-@api_router.get("/users/attendants", response_model=List[User])
-async def get_attendants(current_user: User = Depends(get_current_user)):
-    if current_user.role != UserRole.SUPERVISOR:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    users = await db.users.find(
-        {"role": UserRole.AGENTE, "approved": True},
-        {"_id": 0, "password_hash": 0},
-    ).to_list(100)
-    return [User(**u) for u in users]
-
-
 @api_router.post("/appointments", response_model=Appointment)
 async def create_appointment(apt_data: AppointmentCreate, current_user: User = Depends(get_current_user)):
     block_admin(current_user)
@@ -437,6 +385,162 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
     return Appointment(**apt_doc)
 
 
+class AppointmentRecurringCreate(BaseModel):
+    first_name: str
+    last_name: str
+    protocol_number: str
+    additional_protocols: List[str] = []
+    has_chat: bool = False
+    chat_platform: Optional[str] = None
+    notes: Optional[str] = None
+    emission_system: Optional[str] = None
+    reschedule_reason: Optional[str] = None
+    dates: List[str]
+    time_slot: str
+
+
+
+@api_router.post("/appointments/recurring")
+async def create_recurring_appointments(
+    data: AppointmentRecurringCreate,
+    current_user: User = Depends(get_current_user),
+):
+    block_admin(current_user)
+    block_agent(current_user)
+    check_role_permission(
+        current_user,
+        [UserRole.TELEVENDAS, UserRole.COMERCIAL, UserRole.SUPERVISOR],
+        "criar agendamentos recorrentes",
+    )
+
+    created = []
+
+    for date in data.dates:
+        now_str = datetime.now(timezone.utc).isoformat()
+        apt_doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": None,
+            "first_name": data.first_name,
+            "last_name": data.last_name,
+            "protocol_number": data.protocol_number,
+            "additional_protocols": data.additional_protocols,
+            "has_chat": data.has_chat,
+            "chat_platform": data.chat_platform if data.has_chat else None,
+            "document_urls": [],
+            "date": date,
+            "time_slot": data.time_slot,
+            "appointment_type": "videoconferencia",
+            "status": "pendente_atribuicao",
+            "notes": data.notes,
+            "emission_system": data.emission_system,
+            "created_by": current_user.id,
+            "created_at": now_str,
+            "updated_at": now_str,
+            "reserved_at": now_str,
+            "reschedule_reason": data.reschedule_reason,
+            "recurring_group_id": None,
+        }
+        await db.appointments.insert_one(apt_doc)
+        await log_appointment_history(apt_doc["id"], "created", current_user.id, current_user.name)
+        created.append(apt_doc)
+
+    recurring_group_id = str(uuid.uuid4())
+    for apt in created:
+        await db.appointments.update_one(
+            {"id": apt["id"]},
+            {"$set": {"recurring_group_id": recurring_group_id}},
+        )
+        apt["recurring_group_id"] = recurring_group_id
+
+    return {
+        "message": f"{len(created)} agendamento(s) recorrente(s) criado(s) com sucesso",
+        "recurring_group_id": recurring_group_id,
+        "appointments": created,
+    }
+
+
+@api_router.post("/appointments/redistribute")
+async def redistribute_appointment(
+    payload: Dict[str, str],
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem redistribuir")
+
+    target_appointment_id = payload.get("target_appointment_id")
+    if not target_appointment_id:
+        raise HTTPException(status_code=400, detail="target_appointment_id é obrigatório")
+
+    apt = await db.appointments.find_one({"id": target_appointment_id}, {"_id": 0})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    if not apt.get("emission_system"):
+        raise HTTPException(status_code=400, detail="Agendamento sem sistema de emissão para redistribuição")
+
+    system = apt["emission_system"]
+
+    eligible_agents = await db.users.find(
+        {
+            "role": UserRole.AGENTE,
+            "approved": True,
+            f"can_{system}": True,
+        },
+        {"_id": 0}
+    ).to_list(100)
+
+    if not eligible_agents:
+        raise HTTPException(status_code=400, detail="Nenhum agente elegível para redistribuição")
+
+    occupied_ids = await db.appointments.find(
+        {
+            "date": apt["date"],
+            "time_slot": apt["time_slot"],
+            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
+        },
+        {"_id": 0, "user_id": 1}
+    ).to_list(100)
+
+    busy_user_ids = {x.get("user_id") for x in occupied_ids if x.get("user_id")}
+    free_agents = [a for a in eligible_agents if a["id"] not in busy_user_ids]
+
+    if not free_agents:
+        raise HTTPException(status_code=400, detail="Nenhum agente livre para redistribuição")
+
+    chosen = free_agents[0]
+
+    await db.appointments.update_one(
+        {"id": target_appointment_id},
+        {
+            "$set": {
+                "user_id": chosen["id"],
+                "status": "confirmado",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+    await log_appointment_history(
+        target_appointment_id,
+        "redistributed",
+        current_user.id,
+        current_user.name,
+        "user_id",
+        apt.get("user_id"),
+        chosen["name"],
+    )
+
+    updated = await db.appointments.find_one({"id": target_appointment_id}, {"_id": 0})
+    return {
+        "message": "Agendamento redistribuído com sucesso",
+        "appointment": updated,
+        "assigned_user": {
+            "id": chosen["id"],
+            "name": chosen["name"],
+        },
+    }
+
+
 @api_router.get("/appointments/pending", response_model=List[Appointment])
 async def get_pending_appointments(current_user: User = Depends(get_current_user)):
     if current_user.role != UserRole.SUPERVISOR:
@@ -451,6 +555,7 @@ async def get_pending_appointments(current_user: User = Depends(get_current_user
     ).sort("created_at", -1).to_list(1000)
 
     return [Appointment(**apt) for apt in appointments]
+
 
 @api_router.get("/appointments/available-slots")
 async def get_available_slots(
@@ -532,6 +637,7 @@ async def get_available_slots(
         "available_slots": available_slots,
     }
 
+
 @api_router.get("/appointments/filtered")
 async def get_filtered_appointments(
     search: Optional[str] = None,
@@ -574,6 +680,126 @@ async def get_filtered_appointments(
 
     return items
 
+
+@api_router.get("/appointments/paginated")
+async def get_appointments_paginated(
+    page: int = 1,
+    page_size: int = 20,
+    date: Optional[str] = None,
+    status: Optional[str] = None,
+    user_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+    if current_user.role == UserRole.AGENTE:
+        query["user_id"] = current_user.id
+    if date:
+        query["date"] = date
+    if status:
+        query["status"] = status
+    if user_id and current_user.role in [UserRole.ADMIN, UserRole.SUPERVISOR]:
+        query["user_id"] = user_id
+
+    total = await db.appointments.count_documents(query)
+    skip = max(page - 1, 0) * page_size
+
+    items = await db.appointments.find(query, {"_id": 0}) \
+        .sort([("date", 1), ("time_slot", 1)]) \
+        .skip(skip).limit(page_size).to_list(page_size)
+
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": (total + page_size - 1) // page_size,
+    }
+
+
+@api_router.get("/appointments/check-redistribution/{apt_id}")
+async def check_redistribution(apt_id: str, current_user: User = Depends(get_current_user)):
+    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    system = apt.get("emission_system")
+    if not system:
+        return {
+            "can_redistribute": False,
+            "reason": "Agendamento sem sistema de emissão definido",
+        }
+
+    eligible_agents = await db.users.find(
+        {
+            "role": UserRole.AGENTE,
+            "approved": True,
+            f"can_{system}": True,
+        },
+        {"_id": 0}
+    ).to_list(100)
+
+    occupied_ids = await db.appointments.find(
+        {
+            "date": apt["date"],
+            "time_slot": apt["time_slot"],
+            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
+        },
+        {"_id": 0, "user_id": 1}
+    ).to_list(100)
+
+    busy_user_ids = {x.get("user_id") for x in occupied_ids if x.get("user_id")}
+    free_agents = [a for a in eligible_agents if a["id"] not in busy_user_ids]
+
+    return {
+        "can_redistribute": len(free_agents) > 0,
+        "available_agents": [
+            {"id": a["id"], "name": a["name"]}
+            for a in free_agents
+        ],
+        "required_system": system,
+    }
+
+
+@api_router.get("/appointments/{apt_id}/history")
+async def get_appointment_history(apt_id: str, current_user: User = Depends(get_current_user)):
+    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    history = await db.appointment_history.find(
+        {"appointment_id": apt_id},
+        {"_id": 0}
+    ).sort("changed_at", -1).to_list(500)
+
+    return history
+
+
+@api_router.get("/appointments/{apt_id}/recurring-info")
+async def get_appointment_recurring_info(apt_id: str, current_user: User = Depends(get_current_user)):
+    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    recurring_group_id = apt.get("recurring_group_id")
+    if not recurring_group_id:
+        return {
+            "is_recurring": False,
+            "group_id": None,
+            "appointments": [],
+        }
+
+    items = await db.appointments.find(
+        {"recurring_group_id": recurring_group_id},
+        {"_id": 0}
+    ).sort([("date", 1), ("time_slot", 1)]).to_list(200)
+
+    return {
+        "is_recurring": True,
+        "group_id": recurring_group_id,
+        "appointments": items,
+    }
+
+
 @api_router.put("/appointments/{apt_id}/assign", response_model=Appointment)
 async def assign_appointment(apt_id: str, assign_data: AppointmentAssign, current_user: User = Depends(get_current_user)):
     if current_user.role != UserRole.SUPERVISOR:
@@ -607,6 +833,53 @@ async def assign_appointment(apt_id: str, assign_data: AppointmentAssign, curren
 
     updated_apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
     return Appointment(**updated_apt)
+
+
+@api_router.post("/appointments/{apt_id}/upload")
+async def upload_document(apt_id: str, files: List[UploadFile] = File(...), current_user: User = Depends(get_current_user)):
+    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    uploaded_filenames: List[str] = []
+    for file in files:
+        file_ext = Path(file.filename).suffix
+        filename = f"{apt_id}_{uuid.uuid4()}{file_ext}"
+        file_path = UPLOAD_DIR / filename
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        uploaded_filenames.append(filename)
+
+    new_urls = apt.get("document_urls", []) + uploaded_filenames
+    await db.appointments.update_one({"id": apt_id}, {"$set": {"document_urls": new_urls, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"message": f"{len(files)} file(s) uploaded successfully", "filenames": uploaded_filenames}
+
+
+@api_router.get("/appointments/{apt_id}/download/{filename}")
+async def download_document(apt_id: str, filename: str, current_user: User = Depends(get_current_user)):
+    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
+    if not apt or filename not in apt.get("document_urls", []):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = UPLOAD_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, filename=filename)
+
+
+@api_router.delete("/appointments/{apt_id}/document/{filename}")
+async def delete_document(apt_id: str, filename: str, current_user: User = Depends(get_current_user)):
+    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
+    if not apt or filename not in apt.get("document_urls", []):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = UPLOAD_DIR / filename
+    if file_path.exists():
+        file_path.unlink()
+
+    new_urls = [url for url in apt.get("document_urls", []) if url != filename]
+    await db.appointments.update_one({"id": apt_id}, {"$set": {"document_urls": new_urls, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"message": "Document deleted successfully"}
 
 
 @api_router.get("/appointments", response_model=List[Appointment])
@@ -685,51 +958,58 @@ async def delete_appointment(apt_id: str, current_user: User = Depends(get_curre
     return {"message": "Appointment deleted"}
 
 
-@api_router.post("/appointments/{apt_id}/upload")
-async def upload_document(apt_id: str, files: List[UploadFile] = File(...), current_user: User = Depends(get_current_user)):
-    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
-    if not apt:
-        raise HTTPException(status_code=404, detail="Appointment not found")
+@api_router.put("/users/{user_id}/approve")
+async def approve_user(user_id: str, current_user: User = Depends(get_current_user)):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Only supervisors can approve users")
 
-    uploaded_filenames: List[str] = []
-    for file in files:
-        file_ext = Path(file.filename).suffix
-        filename = f"{apt_id}_{uuid.uuid4()}{file_ext}"
-        file_path = UPLOAD_DIR / filename
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        uploaded_filenames.append(filename)
-
-    new_urls = apt.get("document_urls", []) + uploaded_filenames
-    await db.appointments.update_one({"id": apt_id}, {"$set": {"document_urls": new_urls, "updated_at": datetime.now(timezone.utc).isoformat()}})
-    return {"message": f"{len(files)} file(s) uploaded successfully", "filenames": uploaded_filenames}
+    result = await db.users.update_one({"id": user_id}, {"$set": {"approved": True}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User approved successfully"}
 
 
-@api_router.get("/appointments/{apt_id}/download/{filename}")
-async def download_document(apt_id: str, filename: str, current_user: User = Depends(get_current_user)):
-    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
-    if not apt or filename not in apt.get("document_urls", []):
-        raise HTTPException(status_code=404, detail="Document not found")
+@api_router.put("/users/{user_id}/role")
+async def update_user_role(user_id: str, role_data: UserUpdateRole, current_user: User = Depends(get_current_user)):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Only supervisors can change user roles")
 
-    file_path = UPLOAD_DIR / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path, filename=filename)
+    result = await db.users.update_one({"id": user_id}, {"$set": {"role": role_data.role}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User role updated successfully"}
 
 
-@api_router.delete("/appointments/{apt_id}/document/{filename}")
-async def delete_document(apt_id: str, filename: str, current_user: User = Depends(get_current_user)):
-    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
-    if not apt or filename not in apt.get("document_urls", []):
-        raise HTTPException(status_code=404, detail="Document not found")
+@api_router.put("/users/{user_id}/permissions")
+async def update_user_permissions(user_id: str, perm_data: UserUpdatePermissions, current_user: User = Depends(get_current_user)):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem alterar permissões")
 
-    file_path = UPLOAD_DIR / filename
-    if file_path.exists():
-        file_path.unlink()
+    update_data: Dict[str, Any] = {}
+    if perm_data.can_safeweb is not None:
+        update_data["can_safeweb"] = perm_data.can_safeweb
+    if perm_data.can_serpro is not None:
+        update_data["can_serpro"] = perm_data.can_serpro
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Nenhuma permissão para atualizar")
 
-    new_urls = [url for url in apt.get("document_urls", []) if url != filename]
-    await db.appointments.update_one({"id": apt_id}, {"$set": {"document_urls": new_urls, "updated_at": datetime.now(timezone.utc).isoformat()}})
-    return {"message": "Document deleted successfully"}
+    result = await db.users.update_one({"id": user_id}, {"$set": update_data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    return {"message": "Permissões atualizadas com sucesso"}
+
+
+@api_router.get("/users/attendants", response_model=List[User])
+async def get_attendants(current_user: User = Depends(get_current_user)):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    users = await db.users.find(
+        {"role": UserRole.AGENTE, "approved": True},
+        {"_id": 0, "password_hash": 0},
+    ).to_list(100)
+    return [User(**u) for u in users]
+
+
 
 
 @api_router.get("/notifications", response_model=List[Notification])
@@ -1101,6 +1381,7 @@ async def reset_user_password(
 
     return {"message": "Password reset successfully"}
 
+
 @api_router.get("/users/{user_id}", response_model=User)
 async def get_user_by_id(user_id: str, current_user: User = Depends(get_current_user)):
     if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
@@ -1111,280 +1392,10 @@ async def get_user_by_id(user_id: str, current_user: User = Depends(get_current_
         raise HTTPException(status_code=404, detail="User not found")
 
     return User(**user)
+
+
     
 
-class AppointmentRecurringCreate(BaseModel):
-    first_name: str
-    last_name: str
-    protocol_number: str
-    additional_protocols: List[str] = []
-    has_chat: bool = False
-    chat_platform: Optional[str] = None
-    notes: Optional[str] = None
-    emission_system: Optional[str] = None
-    reschedule_reason: Optional[str] = None
-    dates: List[str]
-    time_slot: str
-
-
-@api_router.post("/appointments/recurring")
-async def create_recurring_appointments(
-    data: AppointmentRecurringCreate,
-    current_user: User = Depends(get_current_user),
-):
-    block_admin(current_user)
-    block_agent(current_user)
-    check_role_permission(
-        current_user,
-        [UserRole.TELEVENDAS, UserRole.COMERCIAL, UserRole.SUPERVISOR],
-        "criar agendamentos recorrentes",
-    )
-
-    created = []
-
-    for date in data.dates:
-        now_str = datetime.now(timezone.utc).isoformat()
-        apt_doc = {
-            "id": str(uuid.uuid4()),
-            "user_id": None,
-            "first_name": data.first_name,
-            "last_name": data.last_name,
-            "protocol_number": data.protocol_number,
-            "additional_protocols": data.additional_protocols,
-            "has_chat": data.has_chat,
-            "chat_platform": data.chat_platform if data.has_chat else None,
-            "document_urls": [],
-            "date": date,
-            "time_slot": data.time_slot,
-            "appointment_type": "videoconferencia",
-            "status": "pendente_atribuicao",
-            "notes": data.notes,
-            "emission_system": data.emission_system,
-            "created_by": current_user.id,
-            "created_at": now_str,
-            "updated_at": now_str,
-            "reserved_at": now_str,
-            "reschedule_reason": data.reschedule_reason,
-            "recurring_group_id": None,
-        }
-        await db.appointments.insert_one(apt_doc)
-        await log_appointment_history(apt_doc["id"], "created", current_user.id, current_user.name)
-        created.append(apt_doc)
-
-    recurring_group_id = str(uuid.uuid4())
-    for apt in created:
-        await db.appointments.update_one(
-            {"id": apt["id"]},
-            {"$set": {"recurring_group_id": recurring_group_id}},
-        )
-        apt["recurring_group_id"] = recurring_group_id
-
-    return {
-        "message": f"{len(created)} agendamento(s) recorrente(s) criado(s) com sucesso",
-        "recurring_group_id": recurring_group_id,
-        "appointments": created,
-    }
-
-
-@api_router.get("/appointments/paginated")
-async def get_appointments_paginated(
-    page: int = 1,
-    page_size: int = 20,
-    date: Optional[str] = None,
-    status: Optional[str] = None,
-    user_id: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
-):
-    query: Dict[str, Any] = {}
-    if current_user.role == UserRole.AGENTE:
-        query["user_id"] = current_user.id
-    if date:
-        query["date"] = date
-    if status:
-        query["status"] = status
-    if user_id and current_user.role in [UserRole.ADMIN, UserRole.SUPERVISOR]:
-        query["user_id"] = user_id
-
-    total = await db.appointments.count_documents(query)
-    skip = max(page - 1, 0) * page_size
-
-    items = await db.appointments.find(query, {"_id": 0}) \
-        .sort([("date", 1), ("time_slot", 1)]) \
-        .skip(skip).limit(page_size).to_list(page_size)
-
-    return {
-        "items": items,
-        "page": page,
-        "page_size": page_size,
-        "total": total,
-        "pages": (total + page_size - 1) // page_size,
-    }
-
-
-@api_router.get("/appointments/{apt_id}/history")
-async def get_appointment_history(apt_id: str, current_user: User = Depends(get_current_user)):
-    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
-    if not apt:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-
-    history = await db.appointment_history.find(
-        {"appointment_id": apt_id},
-        {"_id": 0}
-    ).sort("changed_at", -1).to_list(500)
-
-    return history
-
-
-@api_router.get("/appointments/{apt_id}/recurring-info")
-async def get_appointment_recurring_info(apt_id: str, current_user: User = Depends(get_current_user)):
-    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
-    if not apt:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-
-    recurring_group_id = apt.get("recurring_group_id")
-    if not recurring_group_id:
-        return {
-            "is_recurring": False,
-            "group_id": None,
-            "appointments": [],
-        }
-
-    items = await db.appointments.find(
-        {"recurring_group_id": recurring_group_id},
-        {"_id": 0}
-    ).sort([("date", 1), ("time_slot", 1)]).to_list(200)
-
-    return {
-        "is_recurring": True,
-        "group_id": recurring_group_id,
-        "appointments": items,
-    }
-
-
-@api_router.post("/appointments/redistribute")
-async def redistribute_appointment(
-    payload: Dict[str, str],
-    current_user: User = Depends(get_current_user),
-):
-    if current_user.role != UserRole.SUPERVISOR:
-        raise HTTPException(status_code=403, detail="Apenas supervisores podem redistribuir")
-
-    target_appointment_id = payload.get("target_appointment_id")
-    if not target_appointment_id:
-        raise HTTPException(status_code=400, detail="target_appointment_id é obrigatório")
-
-    apt = await db.appointments.find_one({"id": target_appointment_id}, {"_id": 0})
-    if not apt:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-
-    if not apt.get("emission_system"):
-        raise HTTPException(status_code=400, detail="Agendamento sem sistema de emissão para redistribuição")
-
-    system = apt["emission_system"]
-
-    eligible_agents = await db.users.find(
-        {
-            "role": UserRole.AGENTE,
-            "approved": True,
-            f"can_{system}": True,
-        },
-        {"_id": 0}
-    ).to_list(100)
-
-    if not eligible_agents:
-        raise HTTPException(status_code=400, detail="Nenhum agente elegível para redistribuição")
-
-    occupied_ids = await db.appointments.find(
-        {
-            "date": apt["date"],
-            "time_slot": apt["time_slot"],
-            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
-        },
-        {"_id": 0, "user_id": 1}
-    ).to_list(100)
-
-    busy_user_ids = {x.get("user_id") for x in occupied_ids if x.get("user_id")}
-    free_agents = [a for a in eligible_agents if a["id"] not in busy_user_ids]
-
-    if not free_agents:
-        raise HTTPException(status_code=400, detail="Nenhum agente livre para redistribuição")
-
-    chosen = free_agents[0]
-
-    await db.appointments.update_one(
-        {"id": target_appointment_id},
-        {
-            "$set": {
-                "user_id": chosen["id"],
-                "status": "confirmado",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
-    )
-
-    await log_appointment_history(
-        target_appointment_id,
-        "redistributed",
-        current_user.id,
-        current_user.name,
-        "user_id",
-        apt.get("user_id"),
-        chosen["name"],
-    )
-
-    updated = await db.appointments.find_one({"id": target_appointment_id}, {"_id": 0})
-    return {
-        "message": "Agendamento redistribuído com sucesso",
-        "appointment": updated,
-        "assigned_user": {
-            "id": chosen["id"],
-            "name": chosen["name"],
-        },
-    }
-
-
-@api_router.get("/appointments/check-redistribution/{apt_id}")
-async def check_redistribution(apt_id: str, current_user: User = Depends(get_current_user)):
-    apt = await db.appointments.find_one({"id": apt_id}, {"_id": 0})
-    if not apt:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-
-    system = apt.get("emission_system")
-    if not system:
-        return {
-            "can_redistribute": False,
-            "reason": "Agendamento sem sistema de emissão definido",
-        }
-
-    eligible_agents = await db.users.find(
-        {
-            "role": UserRole.AGENTE,
-            "approved": True,
-            f"can_{system}": True,
-        },
-        {"_id": 0}
-    ).to_list(100)
-
-    occupied_ids = await db.appointments.find(
-        {
-            "date": apt["date"],
-            "time_slot": apt["time_slot"],
-            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
-        },
-        {"_id": 0, "user_id": 1}
-    ).to_list(100)
-
-    busy_user_ids = {x.get("user_id") for x in occupied_ids if x.get("user_id")}
-    free_agents = [a for a in eligible_agents if a["id"] not in busy_user_ids]
-
-    return {
-        "can_redistribute": len(free_agents) > 0,
-        "available_agents": [
-            {"id": a["id"], "name": a["name"]}
-            for a in free_agents
-        ],
-        "required_system": system,
-    }
 
 class ChangeRequestCreate(BaseModel):
     appointment_id: str
