@@ -461,13 +461,21 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
 
         require_online_now = is_within_operational_window(apt_data.date, apt_data.time_slot)
 
-    chosen_agent = await choose_best_agent_for_appointment(
-        date=apt_data.date,
-        time_slot=apt_data.time_slot,
-        emission_system=emission_system,
-        occupies_two_slots=occupies_two_slots,
-        require_online_now=require_online_now,
-    )
+    chosen_agent = None
+    auto_assign_error = None
+
+    try:
+        chosen_agent = await choose_best_agent_for_appointment(
+            date=apt_data.date,
+            time_slot=apt_data.time_slot,
+            emission_system=emission_system,
+            occupies_two_slots=occupies_two_slots,
+            require_online_now=require_online_now,
+        )
+    except Exception as e:
+        auto_assign_error = str(e)
+        logger.exception("[AUTO ASSIGN ERROR] create_appointment failed: %s", str(e))
+        chosen_agent = None
 
     now_str = datetime.now(timezone.utc).isoformat()
     apt_doc = {
@@ -506,6 +514,16 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
             "user_id",
             None,
             chosen_agent["name"],
+        )
+    elif auto_assign_error:
+        await log_appointment_history(
+            apt_doc["id"],
+            "auto_assign_failed",
+            current_user.id,
+            current_user.name,
+            "auto_assign_error",
+            None,
+            auto_assign_error,
         )
 
     return Appointment(
