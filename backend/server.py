@@ -677,44 +677,33 @@ async def redistribute_appointment(
     if not apt.get("emission_system"):
         raise HTTPException(status_code=400, detail="Agendamento sem sistema de emissão para redistribuição")
 
-    system = apt["emission_system"]
+    chosen_agent = await choose_best_agent_for_appointment(
+        date=apt["date"],
+        time_slot=apt["time_slot"],
+        emission_system=apt.get("emission_system"),
+        occupies_two_slots=apt.get("occupies_two_slots", False),
+        require_online_now=True,
+        exclude_agent_ids=[apt.get("user_id")] if apt.get("user_id") else [],
+        exclude_appointment_id=apt["id"],
+    )
 
-    eligible_agents = await db.users.find(
-        {
-            "role": UserRole.AGENTE,
-            "approved": True,
-            f"can_{system}": True,
-        },
-        {"_id": 0}
-    ).to_list(100)
+    if not chosen_agent:
+        raise HTTPException(status_code=400, detail="Nenhum agente online e disponível para redistribuição")
 
-    if not eligible_agents:
-        raise HTTPException(status_code=400, detail="Nenhum agente elegível para redistribuição")
+    old_user_id = apt.get("user_id")
+    old_agent = None
+    if old_user_id:
+        old_agent = await db.users.find_one({"id": old_user_id}, {"_id": 0, "id": 1, "name": 1})
 
-    occupied_ids = await db.appointments.find(
-        {
-            "date": apt["date"],
-            "time_slot": apt["time_slot"],
-            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
-        },
-        {"_id": 0, "user_id": 1}
-    ).to_list(100)
-
-    busy_user_ids = {x.get("user_id") for x in occupied_ids if x.get("user_id")}
-    free_agents = [a for a in eligible_agents if a["id"] not in busy_user_ids]
-
-    if not free_agents:
-        raise HTTPException(status_code=400, detail="Nenhum agente livre para redistribuição")
-
-    chosen = free_agents[0]
+    now_str = datetime.now(timezone.utc).isoformat()
 
     await db.appointments.update_one(
         {"id": target_appointment_id},
         {
             "$set": {
-                "user_id": chosen["id"],
+                "user_id": chosen_agent["id"],
                 "status": "confirmado",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": now_str,
             }
         },
     )
@@ -725,17 +714,27 @@ async def redistribute_appointment(
         current_user.id,
         current_user.name,
         "user_id",
-        apt.get("user_id"),
-        chosen["name"],
+        old_agent["name"] if old_agent else None,
+        chosen_agent["name"],
+    )
+
+    await create_user_notification(
+        chosen_agent["id"],
+        f"Você recebeu uma redistribuição de atendimento para {apt.get('first_name', '')} {apt.get('last_name', '')} às {apt.get('time_slot', '')}.",
+        "appointment_redistributed",
     )
 
     updated = await db.appointments.find_one({"id": target_appointment_id}, {"_id": 0})
+
     return {
         "message": "Agendamento redistribuído com sucesso",
-        "appointment": updated,
+        "appointment": {
+            **updated,
+            "agent_name": chosen_agent["name"],
+        },
         "assigned_user": {
-            "id": chosen["id"],
-            "name": chosen["name"],
+            "id": chosen_agent["id"],
+            "name": chosen_agent["name"],
         },
     }
 
@@ -2798,6 +2797,86 @@ async def get_my_appointments_stats(
         "pending": len([a for a in all_appointments if a.get("status") == "pendente_atribuicao"]),
         "emitidos": len([a for a in all_appointments if a.get("status") == "emitido"]),
         "pending_requests": 0
+    }
+
+@api_router.post("/appointments/redistribute")
+async def redistribute_appointment(
+    payload: Dict[str, str],
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem redistribuir")
+
+    target_appointment_id = payload.get("target_appointment_id")
+    if not target_appointment_id:
+        raise HTTPException(status_code=400, detail="target_appointment_id é obrigatório")
+
+    apt = await db.appointments.find_one({"id": target_appointment_id}, {"_id": 0})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    if not apt.get("emission_system"):
+        raise HTTPException(status_code=400, detail="Agendamento sem sistema de emissão para redistribuição")
+
+    chosen_agent = await choose_best_agent_for_appointment(
+        date=apt["date"],
+        time_slot=apt["time_slot"],
+        emission_system=apt.get("emission_system"),
+        occupies_two_slots=apt.get("occupies_two_slots", False),
+        require_online_now=True,
+        exclude_agent_ids=[apt.get("user_id")] if apt.get("user_id") else [],
+        exclude_appointment_id=apt["id"],
+    )
+
+    if not chosen_agent:
+        raise HTTPException(status_code=400, detail="Nenhum agente online e disponível para redistribuição")
+
+    old_user_id = apt.get("user_id")
+    old_agent = None
+    if old_user_id:
+        old_agent = await db.users.find_one({"id": old_user_id}, {"_id": 0, "id": 1, "name": 1})
+
+    now_str = datetime.now(timezone.utc).isoformat()
+
+    await db.appointments.update_one(
+        {"id": target_appointment_id},
+        {
+            "$set": {
+                "user_id": chosen_agent["id"],
+                "status": "confirmado",
+                "updated_at": now_str,
+            }
+        },
+    )
+
+    await log_appointment_history(
+        target_appointment_id,
+        "redistributed",
+        current_user.id,
+        current_user.name,
+        "user_id",
+        old_agent["name"] if old_agent else None,
+        chosen_agent["name"],
+    )
+
+    await create_user_notification(
+        chosen_agent["id"],
+        f"Você recebeu uma redistribuição de atendimento para {apt.get('first_name', '')} {apt.get('last_name', '')} às {apt.get('time_slot', '')}.",
+        "appointment_redistributed",
+    )
+
+    updated = await db.appointments.find_one({"id": target_appointment_id}, {"_id": 0})
+
+    return {
+        "message": "Agendamento redistribuído com sucesso",
+        "appointment": {
+            **updated,
+            "agent_name": chosen_agent["name"],
+        },
+        "assigned_user": {
+            "id": chosen_agent["id"],
+            "name": chosen_agent["name"],
+        },
     }
 
 app.include_router(api_router)
