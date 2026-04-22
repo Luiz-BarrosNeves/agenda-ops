@@ -384,73 +384,73 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
 
     time_slots = sorted(set(normal_time_slots + extra_slots))
 
-if apt_data.time_slot not in time_slots:
-    raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
+    if apt_data.time_slot not in time_slots:
+        raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
 
-agent_query = {"role": UserRole.AGENTE, "approved": True}
-if apt_data.emission_system:
-    agent_query[f"can_{apt_data.emission_system}"] = True
+    agent_query = {"role": UserRole.AGENTE, "approved": True}
+    if apt_data.emission_system:
+        agent_query[f"can_{apt_data.emission_system}"] = True
 
-agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
-total_agents = len(agents)
+    agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
+    total_agents = len(agents)
 
-appointments = await db.appointments.find(
-    {"date": apt_data.date, "status": {"$ne": "cancelado"}},
-    {"_id": 0},
-).to_list(1000)
+    appointments = await db.appointments.find(
+        {"date": apt_data.date, "status": {"$ne": "cancelado"}},
+        {"_id": 0},
+    ).to_list(1000)
 
-slot_index_map = {slot: idx for idx, slot in enumerate(time_slots)}
+    slot_index_map = {slot: idx for idx, slot in enumerate(time_slots)}
 
-def count_occupied(target_slot: str) -> int:
-    slot_appointments = []
+    def count_occupied(target_slot: str) -> int:
+        slot_appointments = []
 
-    for apt in appointments:
-        apt_slot = apt.get("time_slot")
-        if not apt_slot or apt_slot not in slot_index_map:
-            continue
+        for apt in appointments:
+            apt_slot = apt.get("time_slot")
+            if not apt_slot or apt_slot not in slot_index_map:
+                continue
 
-        occupies_two = apt.get("occupies_two_slots", False)
-        apt_index = slot_index_map[apt_slot]
-        current_slot_index = slot_index_map[target_slot]
+            occupies_two = apt.get("occupies_two_slots", False)
+            apt_index = slot_index_map[apt_slot]
+            current_slot_index = slot_index_map[target_slot]
 
-        affects_current_slot = apt_index == current_slot_index
+            affects_current_slot = apt_index == current_slot_index
 
-        if occupies_two and apt_index + 1 == current_slot_index:
-            affects_current_slot = True
+            if occupies_two and apt_index + 1 == current_slot_index:
+                affects_current_slot = True
 
-        if affects_current_slot:
-            slot_appointments.append(apt)
+            if affects_current_slot:
+                slot_appointments.append(apt)
 
-    return len([
-        a for a in slot_appointments
-        if a.get("status") != "pendente_atribuicao"
-    ])
+        return len([
+            a for a in slot_appointments
+            if a.get("status") != "pendente_atribuicao"
+        ])
 
-current_slot_occupied = count_occupied(apt_data.time_slot)
+    current_slot_occupied = count_occupied(apt_data.time_slot)
 
-if current_slot_occupied >= total_agents:
-    raise HTTPException(
-        status_code=400,
-        detail="O horário selecionado não possui disponibilidade suficiente"
-    )
-
-if occupies_two_slots:
-    current_index = time_slots.index(apt_data.time_slot)
-
-    if current_index + 1 >= len(time_slots):
+    if current_slot_occupied >= total_agents:
         raise HTTPException(
             status_code=400,
-            detail="Este agendamento precisa de 2 horários consecutivos, mas não existe próximo horário disponível"
+            detail="O horário selecionado não possui disponibilidade suficiente"
         )
 
-    next_slot = time_slots[current_index + 1]
-    next_slot_occupied = count_occupied(next_slot)
+    if occupies_two_slots:
+        current_index = time_slots.index(apt_data.time_slot)
 
-    if next_slot_occupied >= total_agents:
-        raise HTTPException(
-            status_code=400,
-            detail="Este agendamento precisa de 2 horários consecutivos, mas o próximo horário não está disponível"
-        )
+        if current_index + 1 >= len(time_slots):
+            raise HTTPException(
+                status_code=400,
+                detail="Este agendamento precisa de 2 horários consecutivos, mas não existe próximo horário disponível"
+            )
+
+        next_slot = time_slots[current_index + 1]
+        next_slot_occupied = count_occupied(next_slot)
+
+        if next_slot_occupied >= total_agents:
+            raise HTTPException(
+                status_code=400,
+                detail="Este agendamento precisa de 2 horários consecutivos, mas o próximo horário não está disponível"
+            )
 
     emission_system = apt_data.emission_system
     if emission_system and emission_system not in ["safeweb", "serpro"]:
@@ -483,6 +483,7 @@ if occupies_two_slots:
         "reserved_at": now_str,
         "reschedule_reason": apt_data.reschedule_reason,
     }
+
     await db.appointments.insert_one(apt_doc)
     await log_appointment_history(apt_doc["id"], "created", current_user.id, current_user.name)
     return Appointment(**apt_doc)
