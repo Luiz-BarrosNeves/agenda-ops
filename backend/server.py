@@ -1678,6 +1678,101 @@ async def create_user_notification(user_id: str, message: str, notif_type: str) 
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
+
+async def try_free_next_slot_for_two_slot_appointment(
+    date: str,
+    first_slot: str,
+    emission_system: Optional[str],
+    current_user: User,
+) -> Optional[Dict[str, Any]]:
+    time_slots = await get_time_slots_for_date(date)
+    slot_index_map = {slot: idx for idx, slot in enumerate(time_slots)}
+
+    if first_slot not in slot_index_map:
+        return None
+
+    current_index = slot_index_map[first_slot]
+    if current_index + 1 >= len(time_slots):
+        return None
+
+    next_slot = time_slots[current_index + 1]
+
+    blocking_appointments = await db.appointments.find(
+        {
+            "date": date,
+            "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
+        },
+        {"_id": 0},
+    ).to_list(1000)
+
+    blocker = None
+    for apt in blocking_appointments:
+        if appointment_affects_slot(apt, next_slot, slot_index_map):
+            blocker = apt
+            break
+
+    if not blocker:
+        return None
+
+    if not blocker.get("user_id"):
+        return None
+
+    new_agent = await choose_best_agent_for_appointment(
+        date=blocker["date"],
+        time_slot=blocker["time_slot"],
+        emission_system=blocker.get("emission_system"),
+        occupies_two_slots=blocker.get("occupies_two_slots", False),
+        require_online_now=is_within_operational_window(blocker["date"], blocker["time_slot"]),
+        exclude_agent_ids=[blocker["user_id"]],
+        exclude_appointment_id=blocker["id"],
+    )
+
+    if not new_agent:
+        return None
+
+    old_agent = await db.users.find_one(
+        {"id": blocker["user_id"]},
+        {"_id": 0, "id": 1, "name": 1},
+    )
+
+    now_str = datetime.now(timezone.utc).isoformat()
+
+    await db.appointments.update_one(
+        {"id": blocker["id"]},
+        {
+            "$set": {
+                "user_id": new_agent["id"],
+                "updated_at": now_str,
+            }
+        },
+    )
+
+    await log_appointment_history(
+        blocker["id"],
+        "slot_freed_by_redistribution",
+        current_user.id,
+        current_user.name,
+        "user_id",
+        old_agent["name"] if old_agent else None,
+        new_agent["name"],
+    )
+
+    await create_user_notification(
+        new_agent["id"],
+        f"Você recebeu uma redistribuição para liberar um encaixe de agenda às {blocker.get('time_slot', '')}.",
+        "appointment_redistributed",
+    )
+
+    return {
+        "freed_slot": next_slot,
+        "redistributed_appointment_id": blocker["id"],
+        "old_agent": old_agent["name"] if old_agent else None,
+        "new_agent": new_agent["name"],
+    }
+
+
+@api_router.get("/stats/dashboard")
+
 @api_router.get("/stats/dashboard")
 async def get_dashboard_stats(date: Optional[str] = None, current_user: User = Depends(get_current_user)):
     if current_user.role not in [UserRole.ADMIN, UserRole.SUPERVISOR]:
