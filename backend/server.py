@@ -1346,6 +1346,232 @@ def today_br_iso() -> str:
 def now_br_time_str() -> str:
     return now_br().strftime("%H:%M")
 
+
+def get_base_time_slots() -> List[str]:
+    return [
+        "08:00", "08:20", "08:40",
+        "09:00", "09:20", "09:40",
+        "10:00", "10:20", "10:40",
+        "11:00", "11:20", "11:40",
+        "12:00", "12:20",
+        "13:00", "13:20", "13:40",
+        "14:00", "14:20", "14:40",
+        "15:00", "15:20", "15:40",
+        "16:00", "16:20", "16:40",
+        "17:00", "17:20", "17:40",
+    ]
+
+
+async def get_time_slots_for_date(date: str) -> List[str]:
+    normal_slots = get_base_time_slots()
+    extra_doc = await db.extra_hours.find_one({"date": date}, {"_id": 0})
+    extra_slots = extra_doc.get("slots", []) if extra_doc else []
+    return sorted(set(normal_slots + extra_slots))
+
+
+def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def is_within_operational_window(date_str: str, slot: str) -> bool:
+    try:
+        target_date = datetime.fromisoformat(date_str).date()
+    except ValueError:
+        return False
+
+    now_local = now_br()
+    today_local = now_local.date()
+
+    if target_date != today_local:
+        return False
+
+    return "08:00" <= slot <= "18:00"
+
+
+def is_agent_currently_online(agent: Dict[str, Any], offline_grace_minutes: int = 5) -> bool:
+    if not agent.get("is_online", False):
+        return False
+
+    last_seen = parse_iso_datetime(agent.get("last_seen"))
+    if not last_seen:
+        return False
+
+    now_utc = datetime.now(timezone.utc)
+    diff_minutes = (now_utc - last_seen).total_seconds() / 60
+    return diff_minutes <= offline_grace_minutes
+
+
+def is_agent_offline_for_more_than_one_hour(agent: Dict[str, Any]) -> bool:
+    last_seen = parse_iso_datetime(agent.get("last_seen"))
+    if not last_seen:
+        return True
+
+    now_utc = datetime.now(timezone.utc)
+    diff_minutes = (now_utc - last_seen).total_seconds() / 60
+    return diff_minutes > 60
+
+
+async def get_eligible_agents(emission_system: Optional[str] = None) -> List[Dict[str, Any]]:
+    query: Dict[str, Any] = {
+        "role": UserRole.AGENTE,
+        "approved": True,
+    }
+
+    if emission_system:
+        query[f"can_{emission_system}"] = True
+
+    return await db.users.find(query, {"_id": 0}).to_list(200)
+
+
+def appointment_affects_slot(appointment: Dict[str, Any], target_slot: str, slot_index_map: Dict[str, int]) -> bool:
+    apt_slot = appointment.get("time_slot")
+    if not apt_slot or apt_slot not in slot_index_map or target_slot not in slot_index_map:
+        return False
+
+    occupies_two = appointment.get("occupies_two_slots", False)
+    apt_index = slot_index_map[apt_slot]
+    target_index = slot_index_map[target_slot]
+
+    if apt_index == target_index:
+        return True
+
+    if occupies_two and apt_index + 1 == target_index:
+        return True
+
+    return False
+
+
+def appointment_blocks_capacity(appointment: Dict[str, Any]) -> bool:
+    return appointment.get("status") != "cancelado"
+
+
+def appointment_counts_as_agent_busy(appointment: Dict[str, Any]) -> bool:
+    return appointment.get("status") not in ["cancelado", "pendente_atribuicao"]
+
+
+async def get_agent_daily_load(date: str, agent_id: str) -> int:
+    appointments = await db.appointments.find(
+        {
+            "date": date,
+            "user_id": agent_id,
+            "status": {"$ne": "cancelado"},
+        },
+        {"_id": 0, "occupies_two_slots": 1},
+    ).to_list(1000)
+
+    load = 0
+    for apt in appointments:
+        load += 2 if apt.get("occupies_two_slots", False) else 1
+
+    return load
+
+
+async def is_agent_available_for_slots(
+    agent_id: str,
+    date: str,
+    time_slot: str,
+    occupies_two_slots: bool,
+    time_slots: List[str],
+    exclude_appointment_id: Optional[str] = None,
+) -> bool:
+    slot_index_map = {slot: idx for idx, slot in enumerate(time_slots)}
+
+    if time_slot not in slot_index_map:
+        return False
+
+    slots_to_check = [time_slot]
+
+    if occupies_two_slots:
+        current_index = slot_index_map[time_slot]
+        if current_index + 1 >= len(time_slots):
+            return False
+        slots_to_check.append(time_slots[current_index + 1])
+
+    query: Dict[str, Any] = {
+        "user_id": agent_id,
+        "date": date,
+        "status": {"$nin": ["cancelado", "pendente_atribuicao"]},
+    }
+
+    if exclude_appointment_id:
+        query["id"] = {"$ne": exclude_appointment_id}
+
+    existing_appointments = await db.appointments.find(query, {"_id": 0}).to_list(1000)
+
+    for existing in existing_appointments:
+        for slot in slots_to_check:
+            if appointment_affects_slot(existing, slot, slot_index_map):
+                return False
+
+    return True
+
+
+async def choose_best_agent_for_appointment(
+    date: str,
+    time_slot: str,
+    emission_system: Optional[str],
+    occupies_two_slots: bool,
+    require_online_now: bool = False,
+    exclude_agent_ids: Optional[List[str]] = None,
+    exclude_appointment_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    exclude_agent_ids = exclude_agent_ids or []
+    time_slots = await get_time_slots_for_date(date)
+    eligible_agents = await get_eligible_agents(emission_system)
+
+    candidates = []
+    for agent in eligible_agents:
+        if agent["id"] in exclude_agent_ids:
+            continue
+
+        if is_agent_offline_for_more_than_one_hour(agent):
+            continue
+
+        if require_online_now and not is_agent_currently_online(agent):
+            continue
+
+        available = await is_agent_available_for_slots(
+            agent_id=agent["id"],
+            date=date,
+            time_slot=time_slot,
+            occupies_two_slots=occupies_two_slots,
+            time_slots=time_slots,
+            exclude_appointment_id=exclude_appointment_id,
+        )
+
+        if not available:
+            continue
+
+        load = await get_agent_daily_load(date, agent["id"])
+        candidates.append({
+            "agent": agent,
+            "load": load,
+            "last_seen": agent.get("last_seen") or "",
+            "name": agent.get("name") or "",
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item["load"], item["last_seen"], item["name"]))
+    return candidates[0]["agent"]
+
+
+async def create_user_notification(user_id: str, message: str, notif_type: str) -> None:
+    await db.notifications.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "message": message,
+        "type": notif_type,
+        "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
 @api_router.get("/stats/dashboard")
 async def get_dashboard_stats(date: Optional[str] = None, current_user: User = Depends(get_current_user)):
     if current_user.role not in [UserRole.ADMIN, UserRole.SUPERVISOR]:
