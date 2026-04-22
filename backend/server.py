@@ -2879,6 +2879,137 @@ async def redistribute_appointment(
         },
     }
 
+@api_router.post("/internal/auto-redistribute-check")
+async def auto_redistribute_check(current_user: User = Depends(get_current_user)):
+    if current_user.role != UserRole.SUPERVISOR:
+        raise HTTPException(status_code=403, detail="Apenas supervisores podem executar")
+
+    now_local = now_br()
+    today_str = now_local.date().isoformat()
+    current_minutes = now_local.hour * 60 + now_local.minute
+
+    time_slots = await get_time_slots_for_date(today_str)
+
+    relevant_slots = []
+    for slot in time_slots:
+        slot_hour, slot_minute = map(int, slot.split(":"))
+        slot_minutes = slot_hour * 60 + slot_minute
+
+        # janela: 2 min antes até 5 min depois do momento atual
+        if current_minutes - 2 <= slot_minutes <= current_minutes + 5:
+            relevant_slots.append(slot)
+
+    if not relevant_slots:
+        return {
+            "message": "Nenhum agendamento na janela de redistribuição",
+            "processed": [],
+            "relevant_slots": [],
+        }
+
+    appointments = await db.appointments.find(
+        {
+            "date": today_str,
+            "time_slot": {"$in": relevant_slots},
+            "status": {"$nin": ["cancelado"]},
+        },
+        {"_id": 0},
+    ).to_list(1000)
+
+    processed = []
+
+    for apt in appointments:
+        agent_id = apt.get("user_id")
+
+        # sem agente atribuído → por enquanto ignora
+        if not agent_id:
+            continue
+
+        agent = await db.users.find_one({"id": agent_id}, {"_id": 0})
+        if not agent:
+            continue
+
+        # se estiver online, não faz nada
+        if is_agent_currently_online(agent):
+            continue
+
+        new_agent = await choose_best_agent_for_appointment(
+            date=apt["date"],
+            time_slot=apt["time_slot"],
+            emission_system=apt.get("emission_system"),
+            occupies_two_slots=apt.get("occupies_two_slots", False),
+            require_online_now=True,
+            exclude_agent_ids=[agent_id],
+            exclude_appointment_id=apt["id"],
+        )
+
+        now_str = datetime.now(timezone.utc).isoformat()
+
+        if new_agent:
+            await db.appointments.update_one(
+                {"id": apt["id"]},
+                {
+                    "$set": {
+                        "user_id": new_agent["id"],
+                        "status": "confirmado",
+                        "updated_at": now_str,
+                    }
+                },
+            )
+
+            await log_appointment_history(
+                apt["id"],
+                "auto_redistributed",
+                "system",
+                "system",
+                "user_id",
+                agent.get("name"),
+                new_agent["name"],
+            )
+
+            await create_user_notification(
+                new_agent["id"],
+                f"Você recebeu uma redistribuição automática para atender {apt.get('first_name', '')} {apt.get('last_name', '')} às {apt['time_slot']}.",
+                "auto_redistributed",
+            )
+
+            processed.append({
+                "appointment_id": apt["id"],
+                "time_slot": apt["time_slot"],
+                "action": "redistributed",
+                "old_agent": agent.get("name"),
+                "new_agent": new_agent["name"],
+            })
+
+        else:
+            await create_user_notification(
+                agent_id,
+                f"Você possui um agendamento às {apt['time_slot']} e continua offline. Não foi encontrado outro agente disponível para redistribuição.",
+                "appointment_warning",
+            )
+
+            await log_appointment_history(
+                apt["id"],
+                "auto_redistribution_unavailable",
+                "system",
+                "system",
+                "user_id",
+                agent.get("name"),
+                agent.get("name"),
+            )
+
+            processed.append({
+                "appointment_id": apt["id"],
+                "time_slot": apt["time_slot"],
+                "action": "notified_original",
+                "agent": agent.get("name"),
+            })
+
+    return {
+        "message": "Auto redistribuição executada",
+        "processed": processed,
+        "relevant_slots": relevant_slots,
+    }
+
 app.include_router(api_router)
 
 
