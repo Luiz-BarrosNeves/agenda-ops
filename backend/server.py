@@ -557,7 +557,7 @@ class AppointmentRecurringCreate(BaseModel):
 async def create_recurring_appointments(
     data: AppointmentRecurringCreate,
     current_user: User = Depends(get_current_user),
-):
+    ):
     block_admin(current_user)
     block_agent(current_user)
     check_role_permission(
@@ -568,7 +568,7 @@ async def create_recurring_appointments(
 
     created = []
 
-        total_protocols = 1 + len(data.additional_protocols)
+    total_protocols = 1 + len(data.additional_protocols)
     occupies_two_slots = total_protocols >= 3
 
     for date in data.dates:
