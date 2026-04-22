@@ -568,11 +568,32 @@ async def create_recurring_appointments(
 
     created = []
 
+        total_protocols = 1 + len(data.additional_protocols)
+    occupies_two_slots = total_protocols >= 3
+
     for date in data.dates:
+        require_online_now = is_within_operational_window(date, data.time_slot)
+
+        chosen_agent = None
+        auto_assign_error = None
+
+        try:
+            chosen_agent = await choose_best_agent_for_appointment(
+                date=date,
+                time_slot=data.time_slot,
+                emission_system=data.emission_system,
+                occupies_two_slots=occupies_two_slots,
+                require_online_now=require_online_now,
+            )
+        except Exception as e:
+            auto_assign_error = str(e)
+            logger.exception("[AUTO ASSIGN ERROR] create_recurring_appointments failed for %s %s: %s", date, data.time_slot, str(e))
+            chosen_agent = None
+
         now_str = datetime.now(timezone.utc).isoformat()
         apt_doc = {
             "id": str(uuid.uuid4()),
-            "user_id": None,
+            "user_id": chosen_agent["id"] if chosen_agent else None,
             "first_name": data.first_name,
             "last_name": data.last_name,
             "protocol_number": data.protocol_number,
@@ -582,8 +603,9 @@ async def create_recurring_appointments(
             "document_urls": [],
             "date": date,
             "time_slot": data.time_slot,
+            "occupies_two_slots": occupies_two_slots,
             "appointment_type": "videoconferencia",
-            "status": "pendente_atribuicao",
+            "status": "confirmado" if chosen_agent else "pendente_atribuicao",
             "notes": data.notes,
             "emission_system": data.emission_system,
             "created_by": current_user.id,
@@ -593,8 +615,32 @@ async def create_recurring_appointments(
             "reschedule_reason": data.reschedule_reason,
             "recurring_group_id": None,
         }
+
         await db.appointments.insert_one(apt_doc)
         await log_appointment_history(apt_doc["id"], "created", current_user.id, current_user.name)
+
+        if chosen_agent:
+            await log_appointment_history(
+                apt_doc["id"],
+                "auto_assigned",
+                current_user.id,
+                current_user.name,
+                "user_id",
+                None,
+                chosen_agent["name"],
+            )
+            apt_doc["agent_name"] = chosen_agent["name"]
+        elif auto_assign_error:
+            await log_appointment_history(
+                apt_doc["id"],
+                "auto_assign_failed",
+                current_user.id,
+                current_user.name,
+                "auto_assign_error",
+                None,
+                auto_assign_error,
+            )
+
         created.append(apt_doc)
 
     recurring_group_id = str(uuid.uuid4())
