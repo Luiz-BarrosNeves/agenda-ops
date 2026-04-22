@@ -1403,8 +1403,14 @@ async def get_time_slots_for_date(date: str) -> List[str]:
 def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
+
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+
+        return parsed
     except Exception:
         return None
 
@@ -1425,26 +1431,32 @@ def is_within_operational_window(date_str: str, slot: str) -> bool:
 
 
 def is_agent_currently_online(agent: Dict[str, Any], offline_grace_minutes: int = 5) -> bool:
-    if not agent.get("is_online", False):
-        return False
+    try:
+        if not agent.get("is_online", False):
+            return False
 
-    last_seen = parse_iso_datetime(agent.get("last_seen"))
-    if not last_seen:
-        return False
+        last_seen = parse_iso_datetime(agent.get("last_seen"))
+        if not last_seen:
+            return False
 
-    now_utc = datetime.now(timezone.utc)
-    diff_minutes = (now_utc - last_seen).total_seconds() / 60
-    return diff_minutes <= offline_grace_minutes
+        now_utc = datetime.now(timezone.utc)
+        diff_minutes = (now_utc - last_seen).total_seconds() / 60
+        return diff_minutes <= offline_grace_minutes
+    except Exception:
+        return False
 
 
 def is_agent_offline_for_more_than_one_hour(agent: Dict[str, Any]) -> bool:
-    last_seen = parse_iso_datetime(agent.get("last_seen"))
-    if not last_seen:
-        return True
+    try:
+        last_seen = parse_iso_datetime(agent.get("last_seen"))
+        if not last_seen:
+            return True
 
-    now_utc = datetime.now(timezone.utc)
-    diff_minutes = (now_utc - last_seen).total_seconds() / 60
-    return diff_minutes > 60
+        now_utc = datetime.now(timezone.utc)
+        diff_minutes = (now_utc - last_seen).total_seconds() / 60
+        return diff_minutes > 60
+    except Exception:
+        return True
 
 
 async def get_eligible_agents(emission_system: Optional[str] = None) -> List[Dict[str, Any]]:
