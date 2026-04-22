@@ -156,28 +156,39 @@ class AppointmentUpdate(BaseModel):
 
 class Appointment(BaseModel):
     model_config = ConfigDict(extra="ignore")
+
     id: str
     user_id: Optional[str] = None
-    agent_name: Optional[str] = None
+
     first_name: str
     last_name: str
     protocol_number: str
+
     additional_protocols: List[str] = []
     has_chat: bool = False
     chat_platform: Optional[str] = None
     document_urls: List[str] = []
+
     date: str
     time_slot: str
-    occupies_two_slots: bool = False
-    appointment_type: str
-    status: str
+
+    appointment_type: Optional[str] = "videoconferencia"
+    status: Optional[str] = "pendente_atribuicao"
     notes: Optional[str] = None
     emission_system: Optional[str] = None
-    created_by: str
-    created_at: str
-    updated_at: str
-    reserved_at: str
+
+    created_by: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    reserved_at: Optional[str] = None
     reschedule_reason: Optional[str] = None
+
+    # Campos extras que já existem/foram usados no sistema
+    agent_name: Optional[str] = None
+    occupies_two_slots: Optional[bool] = False
+    recurring_group_id: Optional[str] = None
+    has_pending_request: Optional[bool] = None
+    pending_request: Optional[dict] = None
 
 
 class Notification(BaseModel):
