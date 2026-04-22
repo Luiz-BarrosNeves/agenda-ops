@@ -384,11 +384,58 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
 
     time_slots = sorted(set(normal_time_slots + extra_slots))
 
-    if apt_data.time_slot not in time_slots:
-        raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
+if apt_data.time_slot not in time_slots:
+    raise HTTPException(status_code=400, detail="Horário selecionado é inválido para esta data")
 
-    if occupies_two_slots:
-        current_index = time_slots.index(apt_data.time_slot)
+agent_query = {"role": UserRole.AGENTE, "approved": True}
+if apt_data.emission_system:
+    agent_query[f"can_{apt_data.emission_system}"] = True
+
+agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
+total_agents = len(agents)
+
+appointments = await db.appointments.find(
+    {"date": apt_data.date, "status": {"$ne": "cancelado"}},
+    {"_id": 0},
+).to_list(1000)
+
+slot_index_map = {slot: idx for idx, slot in enumerate(time_slots)}
+
+def count_occupied(target_slot: str) -> int:
+    slot_appointments = []
+
+    for apt in appointments:
+        apt_slot = apt.get("time_slot")
+        if not apt_slot or apt_slot not in slot_index_map:
+            continue
+
+        occupies_two = apt.get("occupies_two_slots", False)
+        apt_index = slot_index_map[apt_slot]
+        current_slot_index = slot_index_map[target_slot]
+
+        affects_current_slot = apt_index == current_slot_index
+
+        if occupies_two and apt_index + 1 == current_slot_index:
+            affects_current_slot = True
+
+        if affects_current_slot:
+            slot_appointments.append(apt)
+
+    return len([
+        a for a in slot_appointments
+        if a.get("status") != "pendente_atribuicao"
+    ])
+
+current_slot_occupied = count_occupied(apt_data.time_slot)
+
+if current_slot_occupied >= total_agents:
+    raise HTTPException(
+        status_code=400,
+        detail="O horário selecionado não possui disponibilidade suficiente"
+    )
+
+if occupies_two_slots:
+    current_index = time_slots.index(apt_data.time_slot)
 
     if current_index + 1 >= len(time_slots):
         raise HTTPException(
@@ -397,54 +444,7 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
         )
 
     next_slot = time_slots[current_index + 1]
-
-    agent_query = {"role": UserRole.AGENTE, "approved": True}
-    if apt_data.emission_system:
-        agent_query[f"can_{apt_data.emission_system}"] = True
-
-    agents = await db.users.find(agent_query, {"_id": 0}).to_list(100)
-    total_agents = len(agents)
-
-    appointments = await db.appointments.find(
-        {"date": apt_data.date, "status": {"$ne": "cancelado"}},
-        {"_id": 0},
-    ).to_list(1000)
-
-    slot_index_map = {slot: idx for idx, slot in enumerate(time_slots)}
-
-    def count_occupied(target_slot: str) -> int:
-        slot_appointments = []
-
-        for apt in appointments:
-            apt_slot = apt.get("time_slot")
-            if not apt_slot or apt_slot not in slot_index_map:
-                continue
-
-            occupies_two = apt.get("occupies_two_slots", False)
-            apt_index = slot_index_map[apt_slot]
-            current_slot_index = slot_index_map[target_slot]
-
-            affects_current_slot = apt_index == current_slot_index
-
-            if occupies_two and apt_index + 1 == current_slot_index:
-                affects_current_slot = True
-
-            if affects_current_slot:
-                slot_appointments.append(apt)
-
-        return len([
-            a for a in slot_appointments
-            if a.get("status") != "pendente_atribuicao"
-        ])
-
-    current_slot_occupied = count_occupied(apt_data.time_slot)
     next_slot_occupied = count_occupied(next_slot)
-
-    if current_slot_occupied >= total_agents:
-        raise HTTPException(
-            status_code=400,
-            detail="O horário selecionado não possui disponibilidade suficiente"
-        )
 
     if next_slot_occupied >= total_agents:
         raise HTTPException(
