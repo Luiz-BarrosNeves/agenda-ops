@@ -1847,11 +1847,7 @@ async def create_change_request(
             "created_at": now_str,
         })
 
-    return {
-        "message": "Solicitação criada e aguardando aprovação do supervisor",
-        "status": "pending",
-        "request": change_request,
-    }
+    return change_request
 
 
 @api_router.get("/change-requests")
