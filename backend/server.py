@@ -459,10 +459,20 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
     if apt_data.has_chat and apt_data.chat_platform not in ["blip", "chatpro"]:
         raise HTTPException(status_code=400, detail="Quando o cliente tem chat, é obrigatório selecionar a plataforma")
 
+        require_online_now = is_within_operational_window(apt_data.date, apt_data.time_slot)
+
+    chosen_agent = await choose_best_agent_for_appointment(
+        date=apt_data.date,
+        time_slot=apt_data.time_slot,
+        emission_system=emission_system,
+        occupies_two_slots=occupies_two_slots,
+        require_online_now=require_online_now,
+    )
+
     now_str = datetime.now(timezone.utc).isoformat()
     apt_doc = {
         "id": str(uuid.uuid4()),
-        "user_id": None,
+        "user_id": chosen_agent["id"] if chosen_agent else None,
         "first_name": apt_data.first_name,
         "last_name": apt_data.last_name,
         "protocol_number": apt_data.protocol_number,
@@ -474,7 +484,7 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
         "time_slot": apt_data.time_slot,
         "occupies_two_slots": occupies_two_slots,
         "appointment_type": "videoconferencia",
-        "status": "pendente_atribuicao",
+        "status": "confirmado" if chosen_agent else "pendente_atribuicao",
         "notes": apt_data.notes,
         "emission_system": emission_system,
         "created_by": current_user.id,
@@ -483,6 +493,27 @@ async def create_appointment(apt_data: AppointmentCreate, current_user: User = D
         "reserved_at": now_str,
         "reschedule_reason": apt_data.reschedule_reason,
     }
+
+    await db.appointments.insert_one(apt_doc)
+    await log_appointment_history(apt_doc["id"], "created", current_user.id, current_user.name)
+
+    if chosen_agent:
+        await log_appointment_history(
+            apt_doc["id"],
+            "auto_assigned",
+            current_user.id,
+            current_user.name,
+            "user_id",
+            None,
+            chosen_agent["name"],
+        )
+
+    return Appointment(
+        **{
+            **apt_doc,
+            "agent_name": chosen_agent["name"] if chosen_agent else None
+        }
+    )
 
     await db.appointments.insert_one(apt_doc)
     await log_appointment_history(apt_doc["id"], "created", current_user.id, current_user.name)
